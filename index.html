@@ -46,16 +46,14 @@
       border-radius: 16px;
       box-shadow: var(--shadow);
       overflow: hidden;
-      aspect-ratio: 9/16; /* tall preview for mobile; prevents layout shift */
-      max-height: 70vh;
+      aspect-ratio: 4/3; /* tall preview for mobile; prevents layout shift */
+      max-height: 45vh;
     }
     video { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .overlay {
-      position: absolute; inset: 0; pointer-events: none;
-      background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.4) 70%);
-      outline: 2px dashed rgba(255,255,255,0.25);
-      outline-offset: -16px; border-radius: 16px;
-    }
+    .guides { position: absolute; inset: 0; pointer-events: none; }
+    .guide-rect { stroke: rgba(255,255,255,0.85); stroke-width: 2; fill: none; }
+    .corner { stroke: rgba(79,134,255,0.95); stroke-width: 4; }
+    .hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 999px; }
     .led {
       position: absolute; top: 10px; right: 10px; z-index: 3;
       padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -116,7 +114,16 @@
     <main>
       <section class="video-wrap">
         <video id="preview" playsinline autoplay muted></video>
-        <div class="overlay" aria-hidden="true"></div>
+        <svg class="guides" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <!-- Centered guide box (60% width, 35% height) -->
+          <rect class="guide-rect" x="20" y="32.5" width="60" height="35" rx="2"/>
+          <!-- Corner brackets -->
+          <path class="corner" d="M20 38 L20 32.5 L26 32.5"/>
+          <path class="corner" d="M80 32.5 L86 32.5 L86 38"/>
+          <path class="corner" d="M86 70.5 L86 67 L80 67"/>
+          <path class="corner" d="M26 67 L20 67 L20 70.5"/>
+        </svg>
+        <div class="hint">Align barcode within the box</div>
       </section>
 
       <div class="controls" role="group" aria-label="Scanner controls">
