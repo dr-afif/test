@@ -52,7 +52,7 @@
   .scan-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .scan-head b { font-size:1rem; }
   .scan-body { position:relative; flex:1; border:1px solid #e5e5e5; border-radius:12px; overflow:hidden; background:#000; }
-  #camVideo { width:100%; height:100%; object-fit:cover; }
+  #camVideo { width:100%; height:100%; object-fit:cover; transform: translateZ(0); will-change: transform; } /* iOS paint keep-alive */
   #camCanvas, #boxCanvas { position:absolute; inset:0; }
   .scan-foot { display:flex; gap:8px; flex-wrap:wrap; }
   .chip { font-size:.9rem; padding:6px 10px; border-radius:999px; background:#f1f3f5; border:1px solid #e9ecef; }
@@ -132,10 +132,10 @@
 
 <script>
 /* ===== CONFIG ===== */
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";  // Web App /exec URL
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";
 const MAX_DIM_UPLOAD = 1400; // resize MC before upload (speed)
 const OCR_TIMEOUT_MS = 6000;
-const BARCODE_INTERVAL_MS = 160;  // how often to attempt detection on live video
+const BARCODE_INTERVAL_MS = 160;  // detect every ~160ms
 
 /* ===== DOM ===== */
 const $ = id => document.getElementById(id);
@@ -163,7 +163,7 @@ let stream = null;
 let track = null;
 let detector = null;
 let scanning = false;
-let lastDetectTs = 0;
+let detectTimer = null;
 let tesseractWorker = null;
 let torchOn = false;
 
@@ -177,12 +177,11 @@ function setStatus(msg, ok=false, err=false){
 }
 const normalizeMrn = (raw) => {
   if (!raw) return null;
-  const upm = (raw.match(/\b(UPM\\d{6,12})\\b/i)||[])[1];
+  const upm = (raw.match(/\b(UPM\d{6,12})\b/i)||[])[1];
   if (upm) return upm.toUpperCase();
-  const digits = (raw.match(/\\b(\\d{6,12})\\b/)||[])[1];
+  const digits = (raw.match(/\b(\d{6,12})\b/)||[])[1];
   return digits ? ("UPM"+digits) : null;
 };
-
 function fitWithin(w,h,max){ const s=Math.min(1, max/Math.max(w,h)); return { w:Math.round(w*s), h:Math.round(h*s) }; }
 function blobFromCanvas(canvas, type="image/jpeg", q=0.9){ return new Promise(r => canvas.toBlob(r, type, q)); }
 function drawBox(bbox, color="lime"){
@@ -208,13 +207,15 @@ async function getWorker(){
   return tesseractWorker;
 }
 
-/* ===== Live scanner ===== */
+/* ===== Live scanner (iOS-friendly) ===== */
 async function startScan(){
   scanModal.classList.add("open");
   detectedBox.textContent = "— scanning —";
-  foundName = ""; foundMRN = "";
-  try{
-    // Prepare BarcodeDetector if available
+  foundName = ""; foundMRN = ""; drawBox(null);
+
+  try {
+    // Prepare detector if available
+    detector = null;
     if ("BarcodeDetector" in window) {
       try {
         const supported = await BarcodeDetector.getSupportedFormats();
@@ -223,25 +224,37 @@ async function startScan(){
       } catch { detector = null; }
     }
 
+    // Start camera
     stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 }, height: { ideal: 720 }
-      },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false
     });
     camVideo.srcObject = stream;
+    camVideo.setAttribute("playsinline",""); // iOS
+    camVideo.muted = true;
     track = stream.getVideoTracks()[0];
 
+    // Wait for metadata for correct videoWidth/Height
+    await new Promise(res => {
+      const onMeta = () => { camVideo.removeEventListener("loadedmetadata", onMeta); res(); };
+      if (camVideo.readyState >= 1) res(); else camVideo.addEventListener("loadedmetadata", onMeta);
+    });
     await camVideo.play();
 
-    camCanvas.width = boxCanvas.width = camVideo.videoWidth || 1280;
-    camCanvas.height = boxCanvas.height = camVideo.videoHeight || 720;
+    // Size canvases to actual video dimensions
+    const vw = camVideo.videoWidth || 1280;
+    const vh = camVideo.videoHeight || 720;
+    camCanvas.width = boxCanvas.width = vw;
+    camCanvas.height = boxCanvas.height = vh;
 
     scanning = true;
-    lastDetectTs = 0;
-    loopDetect();
+
+    // Use interval loop (more reliable than rAF in modals on iOS)
+    if (detectTimer) clearInterval(detectTimer);
+    detectTimer = setInterval(detectFrame, BARCODE_INTERVAL_MS);
+    setStatus("Camera on. Align barcode; hold steady.", true);
   } catch (e) {
+    console.error(e);
     detectedBox.textContent = "Camera permission blocked or unavailable.";
     setStatus("Camera unavailable", false, true);
   }
@@ -249,69 +262,64 @@ async function startScan(){
 
 function stopScan(){
   scanning = false;
+  if (detectTimer) { clearInterval(detectTimer); detectTimer = null; }
   drawBox(null);
-  try{ if (track) track.stop(); } catch{}
+  try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch {}
   stream = null; track = null;
   scanModal.classList.remove("open");
 }
 
-async function loopDetect(){
-  if (!scanning) return;
-  const now = performance.now();
-  if (now - lastDetectTs >= BARCODE_INTERVAL_MS) {
-    lastDetectTs = now;
-    await detectFrame();
-  }
-  requestAnimationFrame(loopDetect);
-}
-
 async function detectFrame(){
+  if (!scanning || !camVideo || camVideo.readyState < 2) return;
+
+  // Re-sync canvas size if Safari updates video size after play()
+  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+  if (vw && vh && (vw !== camCanvas.width || vh !== camCanvas.height)) {
+    camCanvas.width = boxCanvas.width = vw;
+    camCanvas.height = boxCanvas.height = vh;
+  }
+
   const ctx = camCanvas.getContext("2d");
   ctx.drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
 
-  // Try BarcodeDetector first
+  // 1) Try native BarcodeDetector
   if (detector){
     try{
       const codes = await detector.detect(camCanvas);
       if (codes && codes.length){
-        // pick longest value (usually Code128 MRN)
         let best = codes[0];
         for (const c of codes) if ((c.rawValue||'').length > (best.rawValue||'').length) best = c;
         const bbox = best.boundingBox || rectFromPoints(best.cornerPoints);
         const mrn = normalizeMrn(String(best.rawValue||'').trim());
         if (bbox) drawBox(bbox, mrn ? "lime" : "orange");
-        if (mrn) {
-          // Freeze frame & OCR name above barcode
-          scanning = false;
-          await handleFound(camCanvas, bbox, mrn);
-          return;
-        }
+        if (mrn) { scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;} await handleFound(camCanvas, bbox, mrn); return; }
       } else {
         drawBox(null);
       }
-    } catch(e){ /* ignore */ }
-  } else {
-    // Fallback: Quagga on snapshot
-    await new Promise(resolve=>{
-      const dataUrl = camCanvas.toDataURL("image/jpeg",0.85);
-      Quagga.decodeSingle({
-        src: dataUrl, numOfWorkers: 0, locate: true,
-        inputStream: { size: 800 },
-        locator: { halfSample: true, patchSize: "medium" },
-        decoder: { readers: ["code_128_reader","code_39_reader","i2of5_reader","codabar_reader"] }
-      }, res=>{
-        if (res && res.codeResult && res.codeResult.code){
-          const mrn = normalizeMrn(String(res.codeResult.code));
-          const bbox = res.box ? rectFromPoints(res.box.map(([x,y])=>({x,y}))) : null;
-          if (bbox) drawBox(bbox, mrn ? "lime" : "orange");
-          if (mrn) { scanning = false; handleFound(camCanvas, bbox, mrn).then(resolve); return; }
-        } else {
-          drawBox(null);
-        }
-        resolve();
-      });
-    });
+    } catch (_) {}
+    return;
   }
+
+  // 2) Fallback to Quagga snapshot
+  await new Promise(resolve=>{
+    const dataUrl = camCanvas.toDataURL("image/jpeg", 0.85);
+    Quagga.decodeSingle({
+      src: dataUrl, numOfWorkers: 0, locate: true,
+      inputStream: { size: 800 },
+      locator: { halfSample: true, patchSize: "medium" },
+      decoder: { readers: ["code_128_reader","code_39_reader","i2of5_reader","codabar_reader"] }
+    }, res=>{
+      if (res && res.codeResult && res.codeResult.code){
+        const mrn = normalizeMrn(String(res.codeResult.code));
+        const bbox = res.box ? rectFromPoints(res.box.map(([x,y])=>({x,y}))) : null;
+        if (bbox) drawBox(bbox, mrn ? "lime" : "orange");
+        if (mrn) { scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;} handleFound(camCanvas, bbox, mrn).then(resolve); return; }
+      } else {
+        drawBox(null);
+      }
+      resolve();
+    });
+  });
 }
 
 function rectFromPoints(pts){
@@ -339,7 +347,7 @@ async function handleFound(frameCanvas, bbox, mrn){
     const cctx = crop.getContext("2d");
     cctx.drawImage(frameCanvas, x, y, w, h, 0, 0, w, h);
 
-    // OCR once
+    // OCR once (single line)
     const worker = await getWorker();
     const res = await Promise.race([
       worker.recognize(crop),
@@ -374,7 +382,7 @@ toggleTorchBtn.addEventListener("click", async ()=>{
 openScanBtn.addEventListener("click", startScan);
 closeScanBtn.addEventListener("click", ()=>{
   stopScan();
-  // Fill fields from last found values
+  // Fill overrides from last found values for convenience
   if (foundName) nameManual.value = foundName;
   if (foundMRN)  mrnManual.value  = foundMRN;
 });
@@ -430,7 +438,11 @@ document.getElementById("mcForm").addEventListener("submit", async (e)=>{
       mrnOverride: mrn || null,
       mcfile: { name: mcInput.files[0].name, mime: "image/jpeg", b64: mcB64 }
     };
-    const resp = await fetch(GAS_URL, { method:"POST", body: JSON.stringify(payload) });
+    const resp = await fetch(GAS_URL, {
+      method:"POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
     if (!resp.ok){ const txt = await resp.text(); throw new Error(`HTTP ${resp.status} – ${txt.slice(0,200)}`); }
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || "Unknown server error");
