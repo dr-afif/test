@@ -60,7 +60,8 @@
   </div>
 
   <script>
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec"; // <-- replace after you deploy the GAS
+    // 1) Paste your deployed Google Apps Script Web App URL here:
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";
 
     const $ = (id) => document.getElementById(id);
     const sticker = $("sticker");
@@ -89,6 +90,15 @@
 
     $("mcForm").addEventListener("submit", onSubmit);
 
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+        fr.onerror = reject;
+        fr.readAsDataURL(file);
+      });
+    }
+
     async function onSubmit(e){
       e.preventDefault();
       const zone = $("zone").value;
@@ -113,31 +123,43 @@
         const res = await worker.recognize(stickerFile);
         ocrText = (res.data && res.data.text) || "";
         await worker.terminate();
-        ocrBox.textContent = ocrText.slice(0, 600) || "(no text)";
+        // Show a snippet of OCR (cleaned a little for readability)
+        ocrBox.textContent = (ocrText || "").slice(0, 600) || "(no text)";
       } catch (err) {
         console.error(err);
         ocrBox.textContent = "OCR failed (continuing without OCR text).";
       }
 
-      // Submit to GAS
+      // Upload to GAS as JSON (base64 images)
       setStatus("Uploading to Drive & writing to Sheet…");
       submitBtn.disabled = true;
 
       try {
-        const fd = new FormData();
-        fd.append("zone", zone);
-        fd.append("ocrText", ocrText);
-        fd.append("sticker", stickerFile);
-        fd.append("mcfile", mcFile);
+        const [stickerB64, mcB64] = await Promise.all([
+          fileToBase64(stickerFile),
+          fileToBase64(mcFile)
+        ]);
 
-        const resp = await fetch(GAS_URL, { method: "POST", body: fd });
+        const payload = {
+          zone,
+          ocrText,
+          sticker: { name: stickerFile.name, mime: stickerFile.type, b64: stickerB64 },
+          mcfile:  { name: mcFile.name,     mime: mcFile.type,     b64: mcB64 }
+        };
+
+        const resp = await fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || "Unknown error");
 
         setStatus("Success ✔ Files uploaded & row added.", true);
-        ocrBox.textContent = `Parsed (server): Name=${data.name || "—"} | MRN=${data.mrn || "—"}\nSticker: ${data?.sticker?.url || "—"}\nMC: ${data?.mc?.url || "—"}`;
+        const name = data.name || "—";
+        const mrn  = data.mrn || "—";
+        ocrBox.textContent = `Parsed (server): Name=${name} | MRN=${mrn}\nSticker: ${data?.sticker?.url || "—"}\nMC: ${data?.mc?.url || "—"}`;
         alert("OK:\n" + JSON.stringify(data, null, 2));
-        // (Stay on page so you can test multiple times)
       } catch (err) {
         console.error(err);
         setStatus("Failed: " + err.message, false, true);
