@@ -6,7 +6,7 @@
   <title>MC Use – Test (Crop + HEIC + Barcode)</title>
 
   <style>
-    body { font-family: system-ui, Arial; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, Arial; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
     h2 { margin-bottom: .75rem; }
     fieldset { border: 1px solid #ddd; padding: 1rem; border-radius: .5rem; }
     label { display: block; margin: .6rem 0 .3rem; }
@@ -36,10 +36,12 @@
   <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
   <!-- HEIC -> JPEG -->
   <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+  <!-- Quagga2 (barcode fallback) -->
+  <script src="https://cdn.jsdelivr.net/npm/quagga2@1.8.4/dist/quagga.min.js"></script>
 </head>
 <body>
   <h2>Medical Certificate (MC) Use – Test</h2>
-  <p class="muted">Crop images before OCR & upload. iPhone HEIC is converted to JPEG. MRN comes from barcode.</p>
+  <p class="muted">Crop images before OCR & upload. iPhone HEIC is converted to JPEG. MRN comes from barcode (native or Quagga fallback).</p>
 
   <form id="mcForm">
     <fieldset>
@@ -56,10 +58,11 @@
           <label for="sticker">Patient sticker photo</label>
           <input type="file" id="sticker" accept="image/*" capture="environment" required />
           <div class="btn-row">
-            <button type="button" id="cropStickerBtn" class="small">Crop sticker</button>
+            <button type="button" id="cropStickerNameBtn" class="small">Crop sticker (Name line)</button>
+            <button type="button" id="cropStickerBarcodeBtn" class="small">Crop sticker (Barcode)</button>
           </div>
           <img id="stickerPreview" class="preview" alt="">
-          <div class="hint">Crop to include only the patient name (first line) and the MRN barcode area.</div>
+          <div class="hint">Use the two crop buttons: one for the top **Name line**, one for the **barcode area**.</div>
         </div>
 
         <div>
@@ -118,10 +121,10 @@
   </div>
 
   <script>
-    // ======= CONFIG =======
+    /* ======= CONFIG ======= */
     const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec"; // must end with /exec
 
-    // ======= DOM/State =======
+    /* ======= DOM/State ======= */
     const $ = (id) => document.getElementById(id);
     const stickerInput = $("sticker");
     const mcInput = $("mcfile");
@@ -130,22 +133,29 @@
     const ocrBox = $("ocrResult");
     const statusBox = $("status");
     const submitBtn = $("submitBtn");
+
     const cropModal = $("cropModal");
     const cropImage = $("cropImage");
     const cropTitle = $("cropTitle");
-    const cropStickerBtn = $("cropStickerBtn");
-    const cropMcBtn = $("cropMcBtn");
     const rotateLeftBtn = $("rotateLeft");
     const rotateRightBtn = $("rotateRight");
     const resetCropBtn = $("resetCrop");
     const cancelCropBtn = $("cancelCrop");
     const confirmCropBtn = $("confirmCrop");
+
+    const cropStickerNameBtn = $("cropStickerNameBtn");
+    const cropStickerBarcodeBtn = $("cropStickerBarcodeBtn");
+    const cropMcBtn = $("cropMcBtn");
+
     const nameManual = $("nameManual");
     const mrnManual = $("mrnManual");
 
     let cropper = null;
-    let cropTarget = null; // "sticker" | "mc"
-    let stickerCroppedBlob = null;
+    let cropTarget = null; // "name" | "barcode" | "mc"
+
+    // Cropped blobs
+    let stickerNameCroppedBlob = null;
+    let stickerBarcodeCroppedBlob = null;
     let mcCroppedBlob = null;
 
     function setStatus(msg, ok=false, err=false){
@@ -157,10 +167,7 @@
       const f = input.files?.[0];
       if (!f) { imgEl.src = ""; imgEl.alt = ""; return; }
       const url = URL.createObjectURL(f);
-      imgEl.onerror = () => {
-        console.error("Preview failed. Type:", f.type, "Name:", f.name);
-        imgEl.alt = "Preview failed to load";
-      };
+      imgEl.onerror = () => { console.error("Preview failed.", f.type, f.name); imgEl.alt = "Preview failed"; };
       imgEl.src = url;
       imgEl.onload = () => URL.revokeObjectURL(url);
     }
@@ -168,19 +175,14 @@
     // HEIC -> JPEG
     async function normalizeImageFile(file) {
       if (/image\/hei(c|f)/i.test(file.type) || /\.hei(c|f)$/i.test(file.name)) {
-        try {
-          const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
-          const blob = Array.isArray(result) ? result[0] : result;
-          return new File([blob], (file.name.replace(/\.[^\.]+$/, '') || 'image') + ".jpg", { type: "image/jpeg" });
-        } catch (e) {
-          console.error("HEIC conversion failed:", e);
-          throw new Error("HEIC conversion failed. Use JPEG/PNG or set iPhone Camera → Formats → Most Compatible.");
-        }
+        const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
+        const blob = Array.isArray(result) ? result[0] : result;
+        return new File([blob], (file.name.replace(/\.[^\.]+$/, '') || 'image') + ".jpg", { type: "image/jpeg" });
       }
       return file;
     }
 
-    // Hook file inputs (normalize => preview)
+    // Inputs
     stickerInput.addEventListener("change", async () => {
       if (!stickerInput.files[0]) return;
       const normalized = await normalizeImageFile(stickerInput.files[0]);
@@ -189,7 +191,8 @@
         stickerInput.files = dt.files;
       }
       showPreviewFromFile(stickerInput, stickerPreview);
-      stickerCroppedBlob = null;
+      stickerNameCroppedBlob = null;
+      stickerBarcodeCroppedBlob = null;
     });
 
     mcInput.addEventListener("change", async () => {
@@ -204,11 +207,10 @@
     });
 
     // Cropper
-    function openCropperFor(input, title){
-      const file = input.files?.[0];
+    function openCropperFor(inputFile, title, targetKey){
+      const file = inputFile;
       if (!file) { alert("Please choose a file first."); return; }
       cropTitle.textContent = title;
-
       const url = URL.createObjectURL(file);
       cropImage.src = url;
       cropImage.onload = () => {
@@ -223,13 +225,27 @@
           background: false
         });
       };
-
-      cropTarget = (input === stickerInput) ? "sticker" : "mc";
+      cropTarget = targetKey;
       cropModal.classList.add("open");
     }
 
-    cropStickerBtn.addEventListener("click", () => openCropperFor(stickerInput, "Crop Sticker (focus on Name & MRN barcode)"));
-    cropMcBtn.addEventListener("click", () => openCropperFor(mcInput, "Crop Medical Certificate"));
+    cropStickerNameBtn.addEventListener("click", () => {
+      const f = stickerInput.files?.[0];
+      if (!f) return alert("Pick sticker photo first.");
+      openCropperFor(f, "Crop Sticker (Name line only)", "name");
+    });
+
+    cropStickerBarcodeBtn.addEventListener("click", () => {
+      const f = stickerInput.files?.[0];
+      if (!f) return alert("Pick sticker photo first.");
+      openCropperFor(f, "Crop Sticker (Barcode area)", "barcode");
+    });
+
+    cropMcBtn.addEventListener("click", () => {
+      const f = mcInput.files?.[0];
+      if (!f) return alert("Pick MC photo first.");
+      openCropperFor(f, "Crop Medical Certificate", "mc");
+    });
 
     rotateLeftBtn.addEventListener("click", () => cropper?.rotate(-90));
     rotateRightBtn.addEventListener("click", () => cropper?.rotate(90));
@@ -244,23 +260,23 @@
       const canvas = cropper.getCroppedCanvas({ maxWidth: 4096, maxHeight: 4096 });
       canvas.toBlob((blob) => {
         if (!blob) { alert("Failed to crop image."); return; }
-        if (cropTarget === "sticker") {
-          stickerCroppedBlob = blob;
+        if (cropTarget === "name") {
+          stickerNameCroppedBlob = blob;
           const url = URL.createObjectURL(blob);
-          stickerPreview.src = url;
-          stickerPreview.onload = () => URL.revokeObjectURL(url);
-        } else {
+          stickerPreview.src = url; stickerPreview.onload = () => URL.revokeObjectURL(url);
+        } else if (cropTarget === "barcode") {
+          stickerBarcodeCroppedBlob = blob;
+        } else if (cropTarget === "mc") {
           mcCroppedBlob = blob;
           const url = URL.createObjectURL(blob);
-          mcPreview.src = url;
-          mcPreview.onload = () => URL.revokeObjectURL(url);
+          mcPreview.src = url; mcPreview.onload = () => URL.revokeObjectURL(url);
         }
         cropModal.classList.remove("open");
         cropper.destroy(); cropper = null;
-      }, "image/jpeg", 0.92);
+      }, "image/jpeg", 0.95);
     });
 
-    // OCR helpers
+    // Helpers
     function fileOrBlobToBase64(obj) {
       return new Promise((resolve, reject) => {
         const fr = new FileReader();
@@ -270,62 +286,95 @@
       });
     }
 
-    async function runStickerOCR(blobOrFile){
+    async function runNameOCR(blobOrFile){
       try {
         const { createWorker } = Tesseract;
         const worker = await createWorker({ logger: () => {} });
         await worker.loadLanguage("eng");
         await worker.initialize("eng");
+        await worker.setParameters({
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ ' - @ .",
+          preserve_interword_spaces: "1",
+          // Try single line if you cropped only the name line:
+          tessedit_pageseg_mode: "7" // SINGLE_LINE
+        });
         const res = await worker.recognize(blobOrFile);
         await worker.terminate();
-        return (res?.data?.text) || "";
+        let text = (res?.data?.text || "").toUpperCase().replace(/\s{2,}/g,' ').trim();
+        // Clean leading/trailing junk
+        text = text.replace(/^[^A-Z0-9]+|[^A-Z0-9 '@\.-]+$/g,'').trim();
+        return text || "";
       } catch (e) {
         console.error("OCR failed:", e);
         return "";
       }
     }
 
-    function extractNameFromText(text) {
-      const cleaned = (text || "")
-        .replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ')
-        .replace(/\u200B/g,'')
-        .replace(/\s{2,}/g,' ')
-        .trim();
-      const lines = cleaned.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      return lines.length ? lines[0] : null;
-    }
-
-    // Barcode MRN (native)
-    async function extractMrnFromBarcode(blobOrFile) {
-      const result = { mrn: null, raw: null, digits: null };
+    async function nativeBarcodeDetect(blobOrFile){
+      if (!("BarcodeDetector" in window)) return null;
       try {
-        if (!("BarcodeDetector" in window)) return result;
-
-        let formats = [];
-        try { formats = await BarcodeDetector.getSupportedFormats(); } catch (_) {}
-        const wanted = ['code_128','code_39','code_93','codabar','itf','ean_13','ean_8','pdf417','qr_code','aztec','data_matrix'];
-        const fmts = formats.length ? wanted.filter(f => formats.includes(f)) : wanted;
-
+        const fmts = ['code_128','code_39','code_93','ean_13','ean_8','itf','codabar','pdf417'];
         const detector = new BarcodeDetector({ formats: fmts });
-        const bitmap = await createImageBitmap(blobOrFile);
-        const codes = await detector.detect(bitmap);
-        if (codes && codes.length) {
-          const values = codes.map(c => String(c.rawValue || '').trim()).filter(Boolean);
-          if (values.length) {
-            result.raw = values[0];
-            const upm = values.map(v => (v.match(/\b(UPM\d{6,12})\b/i) || [])[1]).find(Boolean);
-            if (upm) result.mrn = upm.toUpperCase();
-            const digits = values.map(v => (v.match(/\b(\d{6,12})\b/) || [])[1]).find(Boolean);
-            if (digits) result.digits = digits;
-          }
-        }
-      } catch (e) {
-        console.error("Barcode detection failed:", e);
-      }
-      return result;
+        const bmp = await createImageBitmap(blobOrFile);
+        const codes = await detector.detect(bmp);
+        if (codes && codes.length) return String(codes[0].rawValue || '').trim();
+      } catch (e) { console.warn("Native barcode failed:", e); }
+      return null;
     }
 
-    // Submit
+    function normalizeMrn(raw){
+      if (!raw) return null;
+      const upm = (raw.match(/\b(UPM\d{6,12})\b/i) || [])[1];
+      if (upm) return upm.toUpperCase();
+      const digits = (raw.match(/\b(\d{6,12})\b/) || [])[1];
+      if (digits) return "UPM" + digits;
+      return null;
+    }
+
+    function quaggaDecodeFromBlob(blob){
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(blob);
+        // Quagga parameters tuned for still images
+        Quagga.decodeSingle({
+          src: url,
+          numOfWorkers: 0, // in-browser single thread for local file
+          locate: true,
+          inputStream: { size: 1280 },
+          locator: { halfSample: false, patchSize: "medium" },
+          decoder: {
+            readers: [
+              "code_128_reader", "code_39_reader", "code_93_reader",
+              "ean_reader", "ean_8_reader", "i2of5_reader", "codabar_reader"
+            ]
+          }
+        }, (result) => {
+          URL.revokeObjectURL(url);
+          if (result && result.codeResult && result.codeResult.code) {
+            resolve(String(result.codeResult.code));
+          } else {
+            resolve(null);
+          }
+        });
+      });
+    }
+
+    async function extractMrnFromBarcode(blobOrFile){
+      // 1) Try native
+      let raw = await nativeBarcodeDetect(blobOrFile);
+      let mrn = normalizeMrn(raw);
+      if (mrn) return { mrn, raw };
+
+      // 2) Fallback to Quagga2
+      raw = await quaggaDecodeFromBlob(blobOrFile);
+      mrn = normalizeMrn(raw);
+      return { mrn, raw };
+    }
+
+    function extractMrnFromOCR(text){
+      const m = (text || "").match(/\b(UPM\d{6,12})\b/i);
+      return m ? m[1].toUpperCase() : null;
+    }
+
     document.getElementById("mcForm").addEventListener("submit", onSubmit);
 
     async function onSubmit(e){
@@ -339,45 +388,39 @@
         return;
       }
 
-      // Prefer cropped blobs if available
-      const stickerForOcr = stickerCroppedBlob || stickerFile;
-      const mcForUpload   = mcCroppedBlob || mcFile;
+      // Decide sources
+      const nameSource = stickerNameCroppedBlob || stickerFile;
+      const barcodeSource = stickerBarcodeCroppedBlob || stickerFile;
+      const mcSource = mcCroppedBlob || mcFile;
 
       setStatus("Reading barcode for MRN…");
-      const barcode = await extractMrnFromBarcode(stickerForOcr);
+      const barcode = await extractMrnFromBarcode(barcodeSource);
 
-      setStatus("Running OCR on (cropped) sticker…");
-      let ocrText = await runStickerOCR(stickerForOcr);
+      setStatus("Running OCR on Name…");
+      const nameOcr = await runNameOCR(nameSource);
 
-      // Name from OCR; MRN from barcode; allow manual overrides
-      let name = extractNameFromText(ocrText);
-      let mrn = barcode.mrn || null;
+      // Apply overrides & fallbacks
+      let name = nameManual.value.trim() || nameOcr || "";
+      let mrn = (mrnManual.value.trim().toUpperCase()) || barcode.mrn || extractMrnFromOCR(nameOcr) || "";
 
-      if (mrnManual.value.trim())  mrn  = mrnManual.value.trim().toUpperCase();
-      if (nameManual.value.trim()) name = nameManual.value.trim();
-
-      // Fallback to OCR MRN if barcode not found
-      if (!mrn) {
-        const m = (ocrText || "").match(/\b(UPM\d{6,12})\b/i);
-        if (m) mrn = m[1].toUpperCase();
-      }
+      // UI preview
+      ocrBox.textContent = `Name=${name || "—"} | MRN=${mrn || "—"}`;
 
       setStatus("Uploading to Drive & writing to Sheet…");
       submitBtn.disabled = true;
 
       try {
         const [stickerB64, mcB64] = await Promise.all([
-          fileOrBlobToBase64(stickerForOcr),
-          fileOrBlobToBase64(mcForUpload)
+          fileOrBlobToBase64(barcodeSource), // send the barcode-cropped (or full) sticker
+          fileOrBlobToBase64(mcSource)
         ]);
 
         const payload = {
           zone,
-          ocrText,
-          nameOverride: name || null,
-          mrnOverride: mrn || null,
+          ocrText: nameOcr,             // for server logging only
+          nameOverride: name || null,   // enforce final name
+          mrnOverride: mrn || null,     // enforce final MRN (from barcode or manual)
           barcodeRaw: barcode.raw || null,
-          barcodeDigits: barcode.digits || null,
           sticker: { name: stickerFile.name, mime: "image/jpeg", b64: stickerB64 },
           mcfile:  { name: mcFile.name,     mime: "image/jpeg", b64: mcB64 }
         };
