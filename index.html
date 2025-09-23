@@ -39,21 +39,28 @@
     }
     .title { font-weight: 700; letter-spacing: 0.2px; }
     .muted { color: var(--muted); font-size: 0.9rem; }
-
+    /* Viewfinder container */
     .video-wrap {
       position: relative;
       background: #060a15;
       border-radius: 16px;
       box-shadow: var(--shadow);
       overflow: hidden;
-      aspect-ratio: 12/7; /* match guide box ratio (60:35) */ /* tall preview for mobile; prevents layout shift */
+      aspect-ratio: 12/7; /* keep in sync with guide */
       max-height: 38vh;
     }
+
+    /* Centered, ratio-locked guide box that always fits inside with margins */
+    .guide-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 92%; max-width: calc(100% - 16px); /* horizontal margin */
+      aspect-ratio: 12/7; border: 2px solid rgba(255,255,255,0.45); border-radius: 10px;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); pointer-events: none; }
+    @media (min-width: 680px) { .guide-box { width: 90%; } }
     video { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .guides { position: absolute; inset: 0; pointer-events: none; }
-    .guide-rect { stroke: rgba(255,255,255,0.85); stroke-width: 2; fill: none; }
-    .corner { stroke: rgba(79,134,255,0.95); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
-    .hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 999px; }
+    .guides { display: none !important; }
+    .guide-rect { display: none !important; }
+    .corner { display: none !important; }
+    .hint { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 999px; }
     .led {
       position: absolute; top: 10px; right: 10px; z-index: 3;
       padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -95,7 +102,7 @@
     @media (min-width: 680px) { /* desktop-friendly */
       .app { max-width: 900px; margin: 0 auto; }
       .controls { grid-template-columns: repeat(4, 1fr); }
-      .video-wrap { aspect-ratio: 16/9; max-height: 60vh; }
+      .video-wrap { aspect-ratio: 12/7; max-height: 50vh; }
     }
   </style>
   <!-- ZXing (UMD) for barcode scanning -->
@@ -114,23 +121,7 @@
     <main>
       <section class="video-wrap">
         <video id="preview" playsinline autoplay muted></video>
-        <svg class="guides" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <!-- Centered guide box (60% width, 35% height) -->
-          <rect class="guide-rect" x="20" y="32.5" width="60" height="35" rx="2"/>
-          <!-- Corner brackets (inward-facing) -->
-          <!-- TL -->
-          <line class="corner" x1="20" y1="32.5" x2="26" y2="32.5"/>
-          <line class="corner" x1="20" y1="32.5" x2="20" y2="38"/>
-          <!-- TR -->
-          <line class="corner" x1="80" y1="32.5" x2="74" y2="32.5"/>
-          <line class="corner" x1="80" y1="32.5" x2="80" y2="38"/>
-          <!-- BR -->
-          <line class="corner" x1="80" y1="67.5" x2="74" y2="67.5"/>
-          <line class="corner" x1="80" y1="67.5" x2="80" y2="61.5"/>
-          <!-- BL -->
-          <line class="corner" x1="20" y1="67.5" x2="26" y2="67.5"/>
-          <line class="corner" x1="20" y1="67.5" x2="20" y2="61.5"/>
-        </svg>
+        <div class="guide-box" aria-hidden="true"></div>
         <div class="hint">Align barcode within the box</div>
       </section>
 
