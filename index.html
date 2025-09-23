@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MC Use – Test (Crop + HEIC)</title>
+  <title>MC Use – Test (Crop + HEIC + Barcode)</title>
 
   <style>
     body { font-family: system-ui, Arial; max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
@@ -39,7 +39,7 @@
 </head>
 <body>
   <h2>Medical Certificate (MC) Use – Test</h2>
-  <p class="muted">Crop images before OCR & upload. HEIC from iPhone is auto-converted to JPEG.</p>
+  <p class="muted">Crop images before OCR & upload. iPhone HEIC is converted to JPEG. MRN comes from barcode.</p>
 
   <form id="mcForm">
     <fieldset>
@@ -59,7 +59,7 @@
             <button type="button" id="cropStickerBtn" class="small">Crop sticker</button>
           </div>
           <img id="stickerPreview" class="preview" alt="">
-          <div class="hint">Crop to include only the patient name (first line) and the UPM MRN line.</div>
+          <div class="hint">Crop to include only the patient name (first line) and the MRN barcode area.</div>
         </div>
 
         <div>
@@ -69,20 +69,19 @@
             <button type="button" id="cropMcBtn" class="small">Crop MC</button>
           </div>
           <img id="mcPreview" class="preview" alt="">
-          <div class="hint">Optional: crop to exclude background/PII not needed.</div>
         </div>
       </div>
 
       <div class="row-2">
         <div>
-          <label>OCR (parsed)</label>
+          <label>Parsed</label>
           <div id="ocrResult" class="log muted">— waiting —</div>
         </div>
         <div>
           <label>Manual override (optional)</label>
           <input type="text" id="nameManual" placeholder="Name (override)">
           <input type="text" id="mrnManual" placeholder="MRN (UPMxxxxxxxxx)">
-          <div class="hint">If filled, these override OCR results.</div>
+          <div class="hint">If filled, these override OCR/barcode results.</div>
         </div>
       </div>
 
@@ -120,8 +119,7 @@
 
   <script>
     // ======= CONFIG =======
-    // Paste your deployed Google Apps Script Web App URL (must end with /exec)
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec"; // must end with /exec
 
     // ======= DOM/State =======
     const $ = (id) => document.getElementById(id);
@@ -230,7 +228,7 @@
       cropModal.classList.add("open");
     }
 
-    cropStickerBtn.addEventListener("click", () => openCropperFor(stickerInput, "Crop Sticker (focus on Name & UPM MRN)"));
+    cropStickerBtn.addEventListener("click", () => openCropperFor(stickerInput, "Crop Sticker (focus on Name & MRN barcode)"));
     cropMcBtn.addEventListener("click", () => openCropperFor(mcInput, "Crop Medical Certificate"));
 
     rotateLeftBtn.addEventListener("click", () => cropper?.rotate(-90));
@@ -287,18 +285,44 @@
       }
     }
 
-    function cleanAndExtractNameMrn(text) {
-      if (!text) return { name:null, mrn:null };
-      const cleaned = text
+    function extractNameFromText(text) {
+      const cleaned = (text || "")
         .replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ')
         .replace(/\u200B/g,'')
         .replace(/\s{2,}/g,' ')
         .trim();
       const lines = cleaned.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const name = (lines[0] || '') || null; // first line
-      const mrnMatch = cleaned.match(/\b(UPM\d{6,12})\b/i);
-      const mrn = mrnMatch ? mrnMatch[1].toUpperCase() : null;
-      return { name, mrn };
+      return lines.length ? lines[0] : null;
+    }
+
+    // Barcode MRN (native)
+    async function extractMrnFromBarcode(blobOrFile) {
+      const result = { mrn: null, raw: null, digits: null };
+      try {
+        if (!("BarcodeDetector" in window)) return result;
+
+        let formats = [];
+        try { formats = await BarcodeDetector.getSupportedFormats(); } catch (_) {}
+        const wanted = ['code_128','code_39','code_93','codabar','itf','ean_13','ean_8','pdf417','qr_code','aztec','data_matrix'];
+        const fmts = formats.length ? wanted.filter(f => formats.includes(f)) : wanted;
+
+        const detector = new BarcodeDetector({ formats: fmts });
+        const bitmap = await createImageBitmap(blobOrFile);
+        const codes = await detector.detect(bitmap);
+        if (codes && codes.length) {
+          const values = codes.map(c => String(c.rawValue || '').trim()).filter(Boolean);
+          if (values.length) {
+            result.raw = values[0];
+            const upm = values.map(v => (v.match(/\b(UPM\d{6,12})\b/i) || [])[1]).find(Boolean);
+            if (upm) result.mrn = upm.toUpperCase();
+            const digits = values.map(v => (v.match(/\b(\d{6,12})\b/) || [])[1]).find(Boolean);
+            if (digits) result.digits = digits;
+          }
+        }
+      } catch (e) {
+        console.error("Barcode detection failed:", e);
+      }
+      return result;
     }
 
     // Submit
@@ -319,13 +343,24 @@
       const stickerForOcr = stickerCroppedBlob || stickerFile;
       const mcForUpload   = mcCroppedBlob || mcFile;
 
+      setStatus("Reading barcode for MRN…");
+      const barcode = await extractMrnFromBarcode(stickerForOcr);
+
       setStatus("Running OCR on (cropped) sticker…");
       let ocrText = await runStickerOCR(stickerForOcr);
 
-      // Extract fields & apply manual overrides
-      let { name, mrn } = cleanAndExtractNameMrn(ocrText);
-      if (nameManual.value.trim()) name = nameManual.value.trim();
+      // Name from OCR; MRN from barcode; allow manual overrides
+      let name = extractNameFromText(ocrText);
+      let mrn = barcode.mrn || null;
+
       if (mrnManual.value.trim())  mrn  = mrnManual.value.trim().toUpperCase();
+      if (nameManual.value.trim()) name = nameManual.value.trim();
+
+      // Fallback to OCR MRN if barcode not found
+      if (!mrn) {
+        const m = (ocrText || "").match(/\b(UPM\d{6,12})\b/i);
+        if (m) mrn = m[1].toUpperCase();
+      }
 
       setStatus("Uploading to Drive & writing to Sheet…");
       submitBtn.disabled = true;
@@ -341,11 +376,12 @@
           ocrText,
           nameOverride: name || null,
           mrnOverride: mrn || null,
+          barcodeRaw: barcode.raw || null,
+          barcodeDigits: barcode.digits || null,
           sticker: { name: stickerFile.name, mime: "image/jpeg", b64: stickerB64 },
           mcfile:  { name: mcFile.name,     mime: "image/jpeg", b64: mcB64 }
         };
 
-        // No custom headers => simple CORS (no preflight)
         const resp = await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
         if (!resp.ok) {
           const txt = await resp.text();
