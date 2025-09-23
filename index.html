@@ -2,16 +2,150 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Drive File Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>MC Use – Test</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h2 { margin-bottom: .75rem; }
+    fieldset { border: 1px solid #ddd; padding: 1rem; border-radius: .5rem; }
+    label { display: block; margin: .6rem 0 .3rem; }
+    select, input[type=file], button { padding: .5rem; font-size: 1rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .muted { color: #666; font-size: .9rem; }
+    .preview { margin-top: .5rem; max-width: 100%; border: 1px dashed #bbb; border-radius: .4rem; }
+    .log { background:#f7f7f7; border:1px solid #eee; padding:.5rem .75rem; border-radius:.4rem; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ok { color: #0a7a2f; }
+    .err { color: #b00020; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 </head>
 <body>
-  <h1>Google Drive Files</h1>
-  <ul id="file-list"></ul>
+  <h2>Medical Certificate (MC) Use – Test</h2>
+  <p class="muted">This is a sandbox to verify OCR + Drive upload + Sheets write before integrating into the main app.</p>
 
-  <!-- Google API client -->
-  <script src="https://apis.google.com/js/api.js"></script>
-  <!-- Your script -->
-  <script src="script.js"></script>
+  <form id="mcForm">
+    <fieldset>
+      <label for="zone">Zone</label>
+      <select id="zone" required>
+        <option value="">— Select —</option>
+        <option>Green</option>
+        <option>Yellow</option>
+        <option>Red</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label for="sticker">Patient sticker photo</label>
+          <input type="file" id="sticker" accept="image/*" capture="environment" required />
+          <img id="stickerPreview" class="preview" alt="" />
+        </div>
+        <div>
+          <label for="mcfile">Medical Certificate photo</label>
+          <input type="file" id="mcfile" accept="image/*" capture="environment" required />
+          <img id="mcPreview" class="preview" alt="" />
+        </div>
+      </div>
+
+      <label>OCR result (sticker)</label>
+      <div id="ocrResult" class="log muted">— waiting —</div>
+
+      <div style="margin-top:1rem">
+        <button id="submitBtn" type="submit">Submit test</button>
+      </div>
+    </fieldset>
+  </form>
+
+  <div style="margin-top:1rem">
+    <div id="status" class="log">Status: idle</div>
+  </div>
+
+  <script>
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec"; // <-- replace after you deploy the GAS
+
+    const $ = (id) => document.getElementById(id);
+    const sticker = $("sticker");
+    const mcfile = $("mcfile");
+    const stickerPreview = $("stickerPreview");
+    const mcPreview = $("mcPreview");
+    const ocrBox = $("ocrResult");
+    const statusBox = $("status");
+    const submitBtn = $("submitBtn");
+
+    function setStatus(msg, ok=false, err=false){
+      statusBox.textContent = msg;
+      statusBox.className = "log" + (ok ? " ok" : "") + (err ? " err" : "");
+    }
+
+    function showPreview(input, imgEl){
+      const f = input.files?.[0];
+      if (!f) { imgEl.src = ""; return; }
+      const url = URL.createObjectURL(f);
+      imgEl.src = url;
+      imgEl.onload = () => URL.revokeObjectURL(url);
+    }
+
+    sticker.addEventListener("change", () => showPreview(sticker, stickerPreview));
+    mcfile.addEventListener("change", () => showPreview(mcfile, mcPreview));
+
+    $("mcForm").addEventListener("submit", onSubmit);
+
+    async function onSubmit(e){
+      e.preventDefault();
+      const zone = $("zone").value;
+      const stickerFile = sticker.files[0];
+      const mcFile = mcfile.files[0];
+
+      if (!zone || !stickerFile || !mcFile) {
+        alert("Please complete all fields.");
+        return;
+      }
+
+      setStatus("Running OCR…");
+      ocrBox.textContent = "Running OCR on sticker…";
+
+      // OCR
+      let ocrText = "";
+      try {
+        const { createWorker } = Tesseract;
+        const worker = await createWorker({ logger: m => {} });
+        await worker.loadLanguage("eng");
+        await worker.initialize("eng");
+        const res = await worker.recognize(stickerFile);
+        ocrText = (res.data && res.data.text) || "";
+        await worker.terminate();
+        ocrBox.textContent = ocrText.slice(0, 600) || "(no text)";
+      } catch (err) {
+        console.error(err);
+        ocrBox.textContent = "OCR failed (continuing without OCR text).";
+      }
+
+      // Submit to GAS
+      setStatus("Uploading to Drive & writing to Sheet…");
+      submitBtn.disabled = true;
+
+      try {
+        const fd = new FormData();
+        fd.append("zone", zone);
+        fd.append("ocrText", ocrText);
+        fd.append("sticker", stickerFile);
+        fd.append("mcfile", mcFile);
+
+        const resp = await fetch(GAS_URL, { method: "POST", body: fd });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || "Unknown error");
+
+        setStatus("Success ✔ Files uploaded & row added.", true);
+        ocrBox.textContent = `Parsed (server): Name=${data.name || "—"} | MRN=${data.mrn || "—"}\nSticker: ${data?.sticker?.url || "—"}\nMC: ${data?.mc?.url || "—"}`;
+        alert("OK:\n" + JSON.stringify(data, null, 2));
+        // (Stay on page so you can test multiple times)
+      } catch (err) {
+        console.error(err);
+        setStatus("Failed: " + err.message, false, true);
+        alert("Error:\n" + err.message);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+  </script>
 </body>
 </html>
