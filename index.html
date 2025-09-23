@@ -397,6 +397,11 @@
 
   
   btnOCR.addEventListener('click', runOCR);
+  btnStart.addEventListener('click', startScan);
+  btnStop.addEventListener('click', stopScan);
+  btnTorch.addEventListener('click', toggleTorch);
+  // initialize button states
+  setButtons();
   selCams.addEventListener('change', async () => {
     const wasScanning = scanning; await stopScan(); currentDeviceId = selCams.value; if (wasScanning) startScan();
   });
