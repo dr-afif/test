@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Medical Certificate (MC) Use — Live Scan</title>
+<title>Medical Certificate (MC) Use — Live Scan (Robust)</title>
 
 <style>
   :root { --gap: 12px; }
@@ -52,7 +52,7 @@
   .scan-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .scan-head b { font-size:1rem; }
   .scan-body { position:relative; flex:1; border:1px solid #e5e5e5; border-radius:12px; overflow:hidden; background:#000; }
-  #camVideo { width:100%; height:100%; object-fit:cover; transform: translateZ(0); will-change: transform; } /* iOS paint keep-alive */
+  #camVideo { width:100%; height:100%; object-fit:cover; transform: translateZ(0); will-change: transform; } /* iOS keep-alive */
   #camCanvas, #boxCanvas { position:absolute; inset:0; }
   .scan-foot { display:flex; gap:8px; flex-wrap:wrap; }
   .chip { font-size:.9rem; padding:6px 10px; border-radius:999px; background:#f1f3f5; border:1px solid #e9ecef; }
@@ -94,7 +94,7 @@
           </div>
         </div>
 
-        <div class="grid two" style="margin-top:var(--gap)">
+        <div class="grid two" style="margin-top: var(--gap)">
           <div>
             <label>Manual override (optional)</label>
             <input type="text" id="nameManual" placeholder="Name (override)">
@@ -133,9 +133,11 @@
 <script>
 /* ===== CONFIG ===== */
 const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";
-const MAX_DIM_UPLOAD = 1400; // resize MC before upload (speed)
+const MAX_DIM_UPLOAD = 1400;           // resize MC before upload (speed)
 const OCR_TIMEOUT_MS = 6000;
-const BARCODE_INTERVAL_MS = 160;  // detect every ~160ms
+const BARCODE_INTERVAL_MS = 200;       // detection tick
+const OCR_FALLBACK_AFTER_MS = 2500;    // start OCR fallback if no barcode after this
+const OCR_REPEAT_MS = 2000;            // don’t OCR more often than this
 
 /* ===== DOM ===== */
 const $ = id => document.getElementById(id);
@@ -159,18 +161,14 @@ const nameManual = $("nameManual");
 const mrnManual = $("mrnManual");
 
 /* ===== State ===== */
-let stream = null;
-let track = null;
-let detector = null;
-let scanning = false;
-let detectTimer = null;
-let tesseractWorker = null;
-let torchOn = false;
+let stream = null, track = null, detector = null;
+let scanning = false, detectTimer = null, torchOn = false;
+let tesseractWorker = null, ocrRunning = false;
+let startScanTs = 0, lastOcrTryTs = 0;
 
-let foundName = "";
-let foundMRN  = "";
+let foundName = "", foundMRN = "";
 
-/* ===== Utils ===== */
+/* ===== Helpers ===== */
 function setStatus(msg, ok=false, err=false){
   statusEl.textContent = msg;
   statusEl.className = "log" + (ok ? " ok" : "") + (err ? " err" : "");
@@ -183,7 +181,6 @@ const normalizeMrn = (raw) => {
   return digits ? ("UPM"+digits) : null;
 };
 function fitWithin(w,h,max){ const s=Math.min(1, max/Math.max(w,h)); return { w:Math.round(w*s), h:Math.round(h*s) }; }
-function blobFromCanvas(canvas, type="image/jpeg", q=0.9){ return new Promise(r => canvas.toBlob(r, type, q)); }
 function drawBox(bbox, color="lime"){
   const ctx = boxCanvas.getContext("2d");
   ctx.clearRect(0,0,boxCanvas.width,boxCanvas.height);
@@ -192,17 +189,17 @@ function drawBox(bbox, color="lime"){
   ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
 }
 
-/* ===== Tesseract worker (lazy) ===== */
-async function getWorker(){
+/* ===== Tesseract worker ===== */
+async function getWorker(singleLine=false){
   if (tesseractWorker) return tesseractWorker;
   const { createWorker } = Tesseract;
   tesseractWorker = await createWorker({ logger:()=>{} });
   await tesseractWorker.loadLanguage("eng");
   await tesseractWorker.initialize("eng");
   await tesseractWorker.setParameters({
-    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ @'-.",
+    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 @'-./()",
     preserve_interword_spaces: "1",
-    tessedit_pageseg_mode: "7" // single line
+    tessedit_pageseg_mode: singleLine ? "7" : "6"
   });
   return tesseractWorker;
 }
@@ -212,6 +209,7 @@ async function startScan(){
   scanModal.classList.add("open");
   detectedBox.textContent = "— scanning —";
   foundName = ""; foundMRN = ""; drawBox(null);
+  startScanTs = Date.now(); lastOcrTryTs = 0; ocrRunning = false;
 
   try {
     // Prepare detector if available
@@ -224,9 +222,9 @@ async function startScan(){
       } catch { detector = null; }
     }
 
-    // Start camera
+    // Start camera (aim for 1920x1080 when possible)
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false
     });
     camVideo.srcObject = stream;
@@ -249,7 +247,6 @@ async function startScan(){
 
     scanning = true;
 
-    // Use interval loop (more reliable than rAF in modals on iOS)
     if (detectTimer) clearInterval(detectTimer);
     detectTimer = setInterval(detectFrame, BARCODE_INTERVAL_MS);
     setStatus("Camera on. Align barcode; hold steady.", true);
@@ -297,29 +294,22 @@ async function detectFrame(){
         drawBox(null);
       }
     } catch (_) {}
-    return;
+  } else {
+    // 2) Fallback to Quagga snapshot (0° then 90° rotated)
+    const snapshot = camCanvas.toDataURL("image/jpeg", 0.9);
+    const mrnHit = await quaggaTry(snapshot);
+    if (mrnHit) return;
+    const rotated = await rotateDataUrl(snapshot, 90);
+    await quaggaTry(rotated);
   }
 
-  // 2) Fallback to Quagga snapshot
-  await new Promise(resolve=>{
-    const dataUrl = camCanvas.toDataURL("image/jpeg", 0.85);
-    Quagga.decodeSingle({
-      src: dataUrl, numOfWorkers: 0, locate: true,
-      inputStream: { size: 800 },
-      locator: { halfSample: true, patchSize: "medium" },
-      decoder: { readers: ["code_128_reader","code_39_reader","i2of5_reader","codabar_reader"] }
-    }, res=>{
-      if (res && res.codeResult && res.codeResult.code){
-        const mrn = normalizeMrn(String(res.codeResult.code));
-        const bbox = res.box ? rectFromPoints(res.box.map(([x,y])=>({x,y}))) : null;
-        if (bbox) drawBox(bbox, mrn ? "lime" : "orange");
-        if (mrn) { scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;} handleFound(camCanvas, bbox, mrn).then(resolve); return; }
-      } else {
-        drawBox(null);
-      }
-      resolve();
-    });
-  });
+  // 3) OCR fallback if barcode hasn't been found for a while
+  const now = Date.now();
+  if (!ocrRunning && (now - startScanTs > OCR_FALLBACK_AFTER_MS) && (now - lastOcrTryTs > OCR_REPEAT_MS)) {
+    lastOcrTryTs = now;
+    ocrRunning = true;
+    runFallbackOCR(camCanvas).finally(()=>{ ocrRunning = false; });
+  }
 }
 
 function rectFromPoints(pts){
@@ -330,33 +320,79 @@ function rectFromPoints(pts){
   return { x, y, width:w, height:h };
 }
 
+/* Quagga single attempt helper */
+function quaggaDecode(src){
+  return new Promise(resolve=>{
+    Quagga.decodeSingle({
+      src,
+      numOfWorkers: 0,
+      locate: true,
+      inputStream: { size: 1280 },
+      locator: { halfSample: false, patchSize: "x-large" },
+      decoder: { readers: ["code_128_reader","code_39_reader","code_93_reader","i2of5_reader","codabar_reader","ean_reader","ean_8_reader"] }
+    }, res=>{
+      if (res && res.codeResult && res.codeResult.code){
+        const mrn = normalizeMrn(String(res.codeResult.code));
+        const bbox = res.box ? rectFromPoints(res.box.map(([x,y])=>({x,y}))) : null;
+        resolve({ mrn, bbox });
+      } else resolve(null);
+    });
+    // safety timeout
+    setTimeout(()=>resolve(null), 1200);
+  });
+}
+async function quaggaTry(dataUrl){
+  const r = await quaggaDecode(dataUrl);
+  if (r && r.mrn){
+    scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;}
+    // Draw box if we can compute it in canvas space (approximate)
+    if (r.bbox) drawBox(r.bbox, "lime");
+    await handleFound(camCanvas, r.bbox || null, r.mrn);
+    return true;
+  }
+  return false;
+}
+async function rotateDataUrl(dataUrl, deg){
+  const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=dataUrl; });
+  const rad = deg*Math.PI/180;
+  const sw = img.width, sh = img.height;
+  const cw = (deg%180===0)? sw : sh;
+  const ch = (deg%180===0)? sh : sw;
+  const can = document.createElement("canvas"); can.width=cw; can.height=ch;
+  const ctx = can.getContext("2d");
+  ctx.translate(cw/2, ch/2); ctx.rotate(rad); ctx.drawImage(img, -sw/2, -sh/2);
+  return can.toDataURL("image/jpeg", 0.9);
+}
+
+/* When we DO have a barcode -> OCR the name above it (single line) */
 async function handleFound(frameCanvas, bbox, mrn){
   try{
     foundMRN = mrn;
     scanHint.textContent = "Barcode found. Reading name…";
-    // Crop a region above the barcode to OCR the name
-    const m = Math.round(Math.max(6, bbox.height * 0.25));
-    const x = Math.max(0, Math.floor(bbox.x - m));
-    const w = Math.min(frameCanvas.width - x, Math.floor(bbox.width + 2*m));
-    const yBottom = Math.max(0, Math.floor(bbox.y - m));
-    const h = Math.min(frameCanvas.height, Math.floor(2*bbox.height + m));
-    const y = Math.max(0, yBottom - h);
-
-    const crop = document.createElement("canvas");
-    crop.width = w; crop.height = h;
-    const cctx = crop.getContext("2d");
-    cctx.drawImage(frameCanvas, x, y, w, h, 0, 0, w, h);
-
-    // OCR once (single line)
-    const worker = await getWorker();
-    const res = await Promise.race([
-      worker.recognize(crop),
-      new Promise(r => setTimeout(()=>r(null), OCR_TIMEOUT_MS))
-    ]);
     let name = "";
-    if (res && res.data && res.data.text){
-      name = String(res.data.text).toUpperCase().replace(/\s{2,}/g,' ').trim();
-      name = name.replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
+
+    if (bbox){
+      // crop above barcode
+      const m = Math.round(Math.max(6, bbox.height * 0.25));
+      const x = Math.max(0, Math.floor(bbox.x - m));
+      const w = Math.min(frameCanvas.width - x, Math.floor(bbox.width + 2*m));
+      const yBottom = Math.max(0, Math.floor(bbox.y - m));
+      const h = Math.min(frameCanvas.height, Math.floor(2*bbox.height + m));
+      const y = Math.max(0, yBottom - h);
+
+      const crop = document.createElement("canvas");
+      crop.width = w; crop.height = h;
+      crop.getContext("2d").drawImage(frameCanvas, x, y, w, h, 0, 0, w, h);
+
+      const worker = await getWorker(true);
+      const res = await Promise.race([
+        worker.recognize(crop),
+        new Promise(r => setTimeout(()=>r(null), OCR_TIMEOUT_MS))
+      ]);
+      if (res && res.data && res.data.text){
+        name = String(res.data.text).toUpperCase().replace(/\s{2,}/g,' ').trim();
+        name = name.replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
+      }
     }
 
     foundName = name;
@@ -367,22 +403,52 @@ async function handleFound(frameCanvas, bbox, mrn){
   }
 }
 
+/* OCR fallback if barcode is stubborn: try to pull MRN + Name from whole frame */
+async function runFallbackOCR(frameCanvas){
+  try{
+    scanHint.textContent = "No barcode yet — trying OCR fallback…";
+    const worker = await getWorker(false);
+    const res = await Promise.race([
+      worker.recognize(frameCanvas),
+      new Promise(r => setTimeout(()=>r(null), OCR_TIMEOUT_MS))
+    ]);
+    if (!res) return;
+    const text = String(res.data?.text || "").toUpperCase();
+
+    // MRN from text (UPM + digits); if only digits found, prefix
+    let mrn = (text.match(/\b(UPM\d{6,12})\b/i)||[])[1];
+    if (!mrn){
+      const digits = (text.match(/\b(\d{6,12})\b/)||[])[1];
+      if (digits) mrn = "UPM" + digits;
+    }
+    // Name: first line with no digits
+    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    let name = (lines.find(t => t && !/\d/.test(t)) || "").replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
+
+    if (mrn || name){
+      // success -> stop scanning and fill
+      scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;}
+      foundMRN = mrn || foundMRN;
+      foundName = name || foundName;
+      detectedBox.textContent = `Name=${foundName || "—"}  |  MRN=${foundMRN || "—"}`;
+      scanHint.textContent = "OCR fallback used. You can close this window.";
+    }
+  } catch(_){}
+}
+
 /* Torch toggle (if supported) */
 toggleTorchBtn.addEventListener("click", async ()=>{
   if (!track) return;
   try{
     torchOn = !torchOn;
     await track.applyConstraints({ advanced: [{ torch: torchOn }]});
-  }catch(_){
-    alert("Torch not supported on this device.");
-  }
+  }catch{ alert("Torch not supported on this device."); }
 });
 
 /* Open/Close scan */
 openScanBtn.addEventListener("click", startScan);
 closeScanBtn.addEventListener("click", ()=>{
   stopScan();
-  // Fill overrides from last found values for convenience
   if (foundName) nameManual.value = foundName;
   if (foundMRN)  mrnManual.value  = foundMRN;
 });
@@ -413,7 +479,6 @@ async function normalizeForUpload(file){
   const ctx = can.getContext("2d"); ctx.drawImage(img,0,0,w,h);
   return await new Promise(r => can.toBlob(r, "image/jpeg", 0.85));
 }
-
 function blobToBase64(blob){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result).split(",")[1]||""); fr.onerror=rej; fr.readAsDataURL(blob); }); }
 
 /* ===== Submit ===== */
@@ -422,7 +487,6 @@ document.getElementById("mcForm").addEventListener("submit", async (e)=>{
   if (!zoneEl.value || !mcInput.files[0]){
     alert("Please pick a Zone and choose the MC photo."); return;
   }
-  // Prefer scanned values but allow manual overrides
   const name = nameManual.value.trim() || foundName || "";
   const mrn  = (mrnManual.value.trim().toUpperCase()) || foundMRN || "";
 
