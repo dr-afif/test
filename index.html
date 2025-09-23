@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MC Use – Test (Crop + HEIC + Barcode)</title>
-
+  <title>MC Use – Test (Auto-detect, Fast)</title>
   <style>
     body { font-family: system-ui, Arial; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
     h2 { margin-bottom: .75rem; }
@@ -13,27 +12,17 @@
     select, input[type=file], input[type=text], button { padding: .5rem; font-size: 1rem; }
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .muted { color: #666; font-size: .9rem; }
-    .preview { margin-top: .5rem; max-width: 100%; max-height: 240px; border: 1px dashed #bbb; border-radius: .4rem; object-fit: contain; }
+    .preview { margin-top: .5rem; max-width: 100%; max-height: 220px; border: 1px dashed #bbb; border-radius: .4rem; object-fit: contain; }
     .log { background:#f7f7f7; border:1px solid #eee; padding:.5rem .75rem; border-radius:.4rem; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .ok { color: #0a7a2f; }
     .err { color: #b00020; }
     .btn-row { display:flex; gap:.5rem; flex-wrap: wrap; margin-top:.4rem; }
     .small { font-size:.9rem; padding:.35rem .6rem; }
     .hint { font-size:.85rem; color:#555; }
-    .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
-    .modal.open { display: flex; }
-    .modal-card { background: #fff; padding: 1rem; border-radius: .6rem; max-width: 95vw; max-height: 90vh; width: 900px; display:flex; flex-direction: column; gap:.6rem; }
-    .crop-wrap { flex:1; min-height: 360px; border:1px solid #ddd; position:relative; overflow:hidden; }
-    .crop-wrap img { max-width: 100%; display:block; }
-    .modal-actions { display:flex; flex-wrap: wrap; gap:.5rem; justify-content: space-between; align-items:center; }
-    .left-actions, .right-actions { display:flex; gap:.5rem; align-items:center; }
   </style>
 
   <!-- OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-  <!-- Cropper.js -->
-  <link href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.2/dist/cropper.min.js"></script>
   <!-- HEIC -> JPEG -->
   <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <!-- Quagga2 (barcode fallback) -->
@@ -41,7 +30,7 @@
 </head>
 <body>
   <h2>Medical Certificate (MC) Use – Test</h2>
-  <p class="muted">Crop images before OCR & upload. iPhone HEIC is converted to JPEG. MRN comes from barcode (native or Quagga fallback).</p>
+  <p class="muted">Just take photos. The page auto-detects MRN from the barcode and Name from the top-line text. iPhone HEIC is converted. Images are compressed for speed.</p>
 
   <form id="mcForm">
     <fieldset>
@@ -57,20 +46,13 @@
         <div>
           <label for="sticker">Patient sticker photo</label>
           <input type="file" id="sticker" accept="image/*" capture="environment" required />
-          <div class="btn-row">
-            <button type="button" id="cropStickerNameBtn" class="small">Crop sticker (Name line)</button>
-            <button type="button" id="cropStickerBarcodeBtn" class="small">Crop sticker (Barcode)</button>
-          </div>
           <img id="stickerPreview" class="preview" alt="">
-          <div class="hint">Use the two crop buttons: one for the top **Name line**, one for the **barcode area**.</div>
+          <div class="hint">Tip: keep the sticker flat, well-lit, and fill the frame.</div>
         </div>
 
         <div>
           <label for="mcfile">Medical Certificate photo</label>
           <input type="file" id="mcfile" accept="image/*" capture="environment" required />
-          <div class="btn-row">
-            <button type="button" id="cropMcBtn" class="small">Crop MC</button>
-          </div>
           <img id="mcPreview" class="preview" alt="">
         </div>
       </div>
@@ -84,12 +66,12 @@
           <label>Manual override (optional)</label>
           <input type="text" id="nameManual" placeholder="Name (override)">
           <input type="text" id="mrnManual" placeholder="MRN (UPMxxxxxxxxx)">
-          <div class="hint">If filled, these override OCR/barcode results.</div>
+          <div class="hint">If filled, these override auto-detected values.</div>
         </div>
       </div>
 
       <div style="margin-top:1rem" class="btn-row">
-        <button id="submitBtn" type="submit">Submit test</button>
+        <button id="submitBtn" type="submit">Submit</button>
       </div>
     </fieldset>
   </form>
@@ -98,33 +80,12 @@
     <div id="status" class="log">Status: idle</div>
   </div>
 
-  <!-- Crop Modal -->
-  <div id="cropModal" class="modal" aria-hidden="true">
-    <div class="modal-card">
-      <strong id="cropTitle">Crop Image</strong>
-      <div class="crop-wrap">
-        <img id="cropImage" alt="">
-      </div>
-      <div class="modal-actions">
-        <div class="left-actions">
-          <button type="button" id="rotateLeft" class="small">⟲ Rotate -90°</button>
-          <button type="button" id="rotateRight" class="small">⟳ Rotate +90°</button>
-          <button type="button" id="resetCrop" class="small">Reset</button>
-          <span class="hint">Zoom with mouse wheel / pinch</span>
-        </div>
-        <div class="right-actions">
-          <button type="button" id="cancelCrop" class="small">Cancel</button>
-          <button type="button" id="confirmCrop" class="small">Crop & Use</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <script>
     /* ======= CONFIG ======= */
     const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec"; // must end with /exec
+    const MAX_DIMENSION = 1400; // px (resize for speed)
 
-    /* ======= DOM/State ======= */
+    /* ======= DOM ======= */
     const $ = (id) => document.getElementById(id);
     const stickerInput = $("sticker");
     const mcInput = $("mcfile");
@@ -133,183 +94,82 @@
     const ocrBox = $("ocrResult");
     const statusBox = $("status");
     const submitBtn = $("submitBtn");
-
-    const cropModal = $("cropModal");
-    const cropImage = $("cropImage");
-    const cropTitle = $("cropTitle");
-    const rotateLeftBtn = $("rotateLeft");
-    const rotateRightBtn = $("rotateRight");
-    const resetCropBtn = $("resetCrop");
-    const cancelCropBtn = $("cancelCrop");
-    const confirmCropBtn = $("confirmCrop");
-
-    const cropStickerNameBtn = $("cropStickerNameBtn");
-    const cropStickerBarcodeBtn = $("cropStickerBarcodeBtn");
-    const cropMcBtn = $("cropMcBtn");
-
     const nameManual = $("nameManual");
     const mrnManual = $("mrnManual");
-
-    let cropper = null;
-    let cropTarget = null; // "name" | "barcode" | "mc"
-
-    // Cropped blobs
-    let stickerNameCroppedBlob = null;
-    let stickerBarcodeCroppedBlob = null;
-    let mcCroppedBlob = null;
 
     function setStatus(msg, ok=false, err=false){
       statusBox.textContent = msg;
       statusBox.className = "log" + (ok ? " ok" : "") + (err ? " err" : "");
     }
 
-    function showPreviewFromFile(input, imgEl){
-      const f = input.files?.[0];
-      if (!f) { imgEl.src = ""; imgEl.alt = ""; return; }
-      const url = URL.createObjectURL(f);
-      imgEl.onerror = () => { console.error("Preview failed.", f.type, f.name); imgEl.alt = "Preview failed"; };
+    function showPreview(blob, imgEl){
+      const url = URL.createObjectURL(blob);
       imgEl.src = url;
       imgEl.onload = () => URL.revokeObjectURL(url);
     }
 
-    // HEIC -> JPEG
-    async function normalizeImageFile(file) {
+    // HEIC->JPEG + resize + orient
+    async function normalizeAndResize(file) {
+      // Convert HEIC/HEIF to JPEG
       if (/image\/hei(c|f)/i.test(file.type) || /\.hei(c|f)$/i.test(file.name)) {
         const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.92 });
-        const blob = Array.isArray(result) ? result[0] : result;
-        return new File([blob], (file.name.replace(/\.[^\.]+$/, '') || 'image') + ".jpg", { type: "image/jpeg" });
+        file = new File([Array.isArray(result) ? result[0] : result], (file.name.replace(/\.[^\.]+$/, '') || 'image') + ".jpg", { type: "image/jpeg" });
       }
-      return file;
+      // Draw to canvas & downscale
+      const img = await blobToImage(file);
+      const { w, h } = fitWithin(img.naturalWidth || img.width, img.naturalHeight || img.height, MAX_DIMENSION);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85));
+      return blob;
     }
+    function fitWithin(w, h, max){
+      const scale = Math.min(1, max / Math.max(w, h));
+      return { w: Math.round(w*scale), h: Math.round(h*scale) };
+    }
+    function blobToImage(blob){ return new Promise((res, rej) => { const u = URL.createObjectURL(blob); const i = new Image(); i.onload = () => { URL.revokeObjectURL(u); res(i); }; i.onerror = rej; i.src = u; }); }
+    function blobToBase64(b){ return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]||""); fr.onerror = rej; fr.readAsDataURL(b); }); }
 
-    // Inputs
+    // Hook inputs: normalize & preview
+    let stickerBlob = null, mcBlob = null; // compressed blobs used for detection & upload
+
     stickerInput.addEventListener("change", async () => {
       if (!stickerInput.files[0]) return;
-      const normalized = await normalizeImageFile(stickerInput.files[0]);
-      if (normalized !== stickerInput.files[0]) {
-        const dt = new DataTransfer(); dt.items.add(normalized);
-        stickerInput.files = dt.files;
-      }
-      showPreviewFromFile(stickerInput, stickerPreview);
-      stickerNameCroppedBlob = null;
-      stickerBarcodeCroppedBlob = null;
+      setStatus("Processing sticker photo…");
+      stickerBlob = await normalizeAndResize(stickerInput.files[0]);
+      showPreview(stickerBlob, stickerPreview);
+      setStatus("Sticker ready", true);
+      autoParsePreview(); // try extracting immediately
     });
 
     mcInput.addEventListener("change", async () => {
       if (!mcInput.files[0]) return;
-      const normalized = await normalizeImageFile(mcInput.files[0]);
-      if (normalized !== mcInput.files[0]) {
-        const dt = new DataTransfer(); dt.items.add(normalized);
-        mcInput.files = dt.files;
-      }
-      showPreviewFromFile(mcInput, mcPreview);
-      mcCroppedBlob = null;
+      setStatus("Processing MC photo…");
+      mcBlob = await normalizeAndResize(mcInput.files[0]);
+      showPreview(mcBlob, mcPreview);
+      setStatus("MC ready", true);
     });
 
-    // Cropper
-    function openCropperFor(inputFile, title, targetKey){
-      const file = inputFile;
-      if (!file) { alert("Please choose a file first."); return; }
-      cropTitle.textContent = title;
-      const url = URL.createObjectURL(file);
-      cropImage.src = url;
-      cropImage.onload = () => {
-        if (cropper) { cropper.destroy(); cropper = null; }
-        cropper = new Cropper(cropImage, {
-          viewMode: 1,
-          autoCropArea: 0.9,
-          responsive: true,
-          movable: true,
-          zoomable: true,
-          rotatable: true,
-          background: false
-        });
-      };
-      cropTarget = targetKey;
-      cropModal.classList.add("open");
+    // Auto-parse on stickerBlob
+    async function autoParsePreview(){
+      if (!stickerBlob) return;
+      setStatus("Detecting barcode + OCR…");
+
+      const [barcode, nameOcr] = await Promise.all([
+        extractMrnFromBarcode(stickerBlob),
+        runNameOCR(stickerBlob)
+      ]);
+
+      const name = nameManual.value.trim() || nameOcr || "";
+      const mrn  = mrnManual.value.trim().toUpperCase() || barcode.mrn || extractMrnFromOCR(nameOcr) || "";
+
+      ocrBox.textContent = `Name=${name || "—"} | MRN=${mrn || "—"}`;
+      setStatus("Ready", true);
     }
 
-    cropStickerNameBtn.addEventListener("click", () => {
-      const f = stickerInput.files?.[0];
-      if (!f) return alert("Pick sticker photo first.");
-      openCropperFor(f, "Crop Sticker (Name line only)", "name");
-    });
-
-    cropStickerBarcodeBtn.addEventListener("click", () => {
-      const f = stickerInput.files?.[0];
-      if (!f) return alert("Pick sticker photo first.");
-      openCropperFor(f, "Crop Sticker (Barcode area)", "barcode");
-    });
-
-    cropMcBtn.addEventListener("click", () => {
-      const f = mcInput.files?.[0];
-      if (!f) return alert("Pick MC photo first.");
-      openCropperFor(f, "Crop Medical Certificate", "mc");
-    });
-
-    rotateLeftBtn.addEventListener("click", () => cropper?.rotate(-90));
-    rotateRightBtn.addEventListener("click", () => cropper?.rotate(90));
-    resetCropBtn.addEventListener("click", () => cropper?.reset());
-    cancelCropBtn.addEventListener("click", () => {
-      cropModal.classList.remove("open");
-      if (cropper) { cropper.destroy(); cropper = null; }
-    });
-
-    confirmCropBtn.addEventListener("click", () => {
-      if (!cropper) return;
-      const canvas = cropper.getCroppedCanvas({ maxWidth: 4096, maxHeight: 4096 });
-      canvas.toBlob((blob) => {
-        if (!blob) { alert("Failed to crop image."); return; }
-        if (cropTarget === "name") {
-          stickerNameCroppedBlob = blob;
-          const url = URL.createObjectURL(blob);
-          stickerPreview.src = url; stickerPreview.onload = () => URL.revokeObjectURL(url);
-        } else if (cropTarget === "barcode") {
-          stickerBarcodeCroppedBlob = blob;
-        } else if (cropTarget === "mc") {
-          mcCroppedBlob = blob;
-          const url = URL.createObjectURL(blob);
-          mcPreview.src = url; mcPreview.onload = () => URL.revokeObjectURL(url);
-        }
-        cropModal.classList.remove("open");
-        cropper.destroy(); cropper = null;
-      }, "image/jpeg", 0.95);
-    });
-
-    // Helpers
-    function fileOrBlobToBase64(obj) {
-      return new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
-        fr.onerror = reject;
-        fr.readAsDataURL(obj);
-      });
-    }
-
-    async function runNameOCR(blobOrFile){
-      try {
-        const { createWorker } = Tesseract;
-        const worker = await createWorker({ logger: () => {} });
-        await worker.loadLanguage("eng");
-        await worker.initialize("eng");
-        await worker.setParameters({
-          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ ' - @ .",
-          preserve_interword_spaces: "1",
-          // Try single line if you cropped only the name line:
-          tessedit_pageseg_mode: "7" // SINGLE_LINE
-        });
-        const res = await worker.recognize(blobOrFile);
-        await worker.terminate();
-        let text = (res?.data?.text || "").toUpperCase().replace(/\s{2,}/g,' ').trim();
-        // Clean leading/trailing junk
-        text = text.replace(/^[^A-Z0-9]+|[^A-Z0-9 '@\.-]+$/g,'').trim();
-        return text || "";
-      } catch (e) {
-        console.error("OCR failed:", e);
-        return "";
-      }
-    }
-
+    // ===== Barcode (native first, Quagga fallback) =====
     async function nativeBarcodeDetect(blobOrFile){
       if (!("BarcodeDetector" in window)) return null;
       try {
@@ -318,10 +178,25 @@
         const bmp = await createImageBitmap(blobOrFile);
         const codes = await detector.detect(bmp);
         if (codes && codes.length) return String(codes[0].rawValue || '').trim();
-      } catch (e) { console.warn("Native barcode failed:", e); }
+      } catch (e) { /* ignore */ }
       return null;
     }
-
+    function quaggaDecodeFromBlob(blob){
+      return new Promise((resolve) => {
+        const url = URL.createObjectURL(blob);
+        Quagga.decodeSingle({
+          src: url,
+          numOfWorkers: 0,
+          locate: true,
+          inputStream: { size: 1280 },
+          locator: { halfSample: true, patchSize: "large" },
+          decoder: { readers: ["code_128_reader", "code_39_reader", "code_93_reader", "i2of5_reader", "codabar_reader"] }
+        }, (result) => {
+          URL.revokeObjectURL(url);
+          resolve(result?.codeResult?.code ? String(result.codeResult.code) : null);
+        });
+      });
+    }
     function normalizeMrn(raw){
       if (!raw) return null;
       const upm = (raw.match(/\b(UPM\d{6,12})\b/i) || [])[1];
@@ -330,112 +205,104 @@
       if (digits) return "UPM" + digits;
       return null;
     }
-
-    function quaggaDecodeFromBlob(blob){
-      return new Promise((resolve) => {
-        const url = URL.createObjectURL(blob);
-        // Quagga parameters tuned for still images
-        Quagga.decodeSingle({
-          src: url,
-          numOfWorkers: 0, // in-browser single thread for local file
-          locate: true,
-          inputStream: { size: 1280 },
-          locator: { halfSample: false, patchSize: "medium" },
-          decoder: {
-            readers: [
-              "code_128_reader", "code_39_reader", "code_93_reader",
-              "ean_reader", "ean_8_reader", "i2of5_reader", "codabar_reader"
-            ]
-          }
-        }, (result) => {
-          URL.revokeObjectURL(url);
-          if (result && result.codeResult && result.codeResult.code) {
-            resolve(String(result.codeResult.code));
-          } else {
-            resolve(null);
-          }
-        });
-      });
-    }
-
-    async function extractMrnFromBarcode(blobOrFile){
-      // 1) Try native
-      let raw = await nativeBarcodeDetect(blobOrFile);
+    async function extractMrnFromBarcode(blob){
+      let raw = await nativeBarcodeDetect(blob);
       let mrn = normalizeMrn(raw);
       if (mrn) return { mrn, raw };
-
-      // 2) Fallback to Quagga2
-      raw = await quaggaDecodeFromBlob(blobOrFile);
+      raw = await quaggaDecodeFromBlob(blob);
       mrn = normalizeMrn(raw);
       return { mrn, raw };
     }
-
     function extractMrnFromOCR(text){
       const m = (text || "").match(/\b(UPM\d{6,12})\b/i);
       return m ? m[1].toUpperCase() : null;
     }
 
+    // ===== OCR (auto-pick top name line) =====
+    async function runNameOCR(blob){
+      try {
+        const { createWorker } = Tesseract;
+        const worker = await createWorker({ logger: () => {} });
+        await worker.loadLanguage("eng");
+        await worker.initialize("eng");
+        await worker.setParameters({
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ @'-.",
+          preserve_interword_spaces: "1",
+          tessedit_pageseg_mode: "6" // Assume a block of text
+        });
+        const res = await worker.recognize(blob);
+        await worker.terminate();
+
+        const lines = (res?.data?.lines || []).slice().sort((a,b)=>a.bbox.y0 - b.bbox.y0);
+        // choose earliest line with mostly letters/spaces and no digits
+        let pick = null;
+        for (const ln of lines) {
+          const t = String(ln.text || "").toUpperCase().replace(/\s{2,}/g,' ').trim();
+          if (!t) continue;
+          if (/\d/.test(t)) continue;                // no digits in name
+          if (!/^[A-Z][A-Z @'\.-]{3,}$/.test(t)) continue; // looks like uppercase name
+          pick = t.replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
+          break;
+        }
+        // fallback: first non-empty, no-digit line
+        if (!pick) {
+          const all = String(res?.data?.text || "").toUpperCase().split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+          pick = all.find(t => t && !/\d/.test(t)) || "";
+          pick = pick.replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
+        }
+        return pick || "";
+      } catch (e) {
+        return "";
+      }
+    }
+
+    // ===== Submit =====
     document.getElementById("mcForm").addEventListener("submit", onSubmit);
 
     async function onSubmit(e){
       e.preventDefault();
       const zone = document.getElementById("zone").value;
-      const stickerFile = stickerInput.files[0];
-      const mcFile = mcInput.files[0];
-
-      if (!zone || !stickerFile || !mcFile) {
+      if (!zone || !stickerInput.files[0] || !mcInput.files[0]) {
         alert("Please complete all fields.");
         return;
       }
+      // Ensure blobs ready
+      if (!stickerBlob) stickerBlob = await normalizeAndResize(stickerInput.files[0]);
+      if (!mcBlob) mcBlob = await normalizeAndResize(mcInput.files[0]);
 
-      // Decide sources
-      const nameSource = stickerNameCroppedBlob || stickerFile;
-      const barcodeSource = stickerBarcodeCroppedBlob || stickerFile;
-      const mcSource = mcCroppedBlob || mcFile;
+      setStatus("Extracting data…");
+      const [barcode, nameOcr] = await Promise.all([
+        extractMrnFromBarcode(stickerBlob),
+        runNameOCR(stickerBlob)
+      ]);
 
-      setStatus("Reading barcode for MRN…");
-      const barcode = await extractMrnFromBarcode(barcodeSource);
-
-      setStatus("Running OCR on Name…");
-      const nameOcr = await runNameOCR(nameSource);
-
-      // Apply overrides & fallbacks
       let name = nameManual.value.trim() || nameOcr || "";
-      let mrn = (mrnManual.value.trim().toUpperCase()) || barcode.mrn || extractMrnFromOCR(nameOcr) || "";
+      let mrn  = mrnManual.value.trim().toUpperCase() || barcode.mrn || extractMrnFromOCR(nameOcr) || "";
 
-      // UI preview
       ocrBox.textContent = `Name=${name || "—"} | MRN=${mrn || "—"}`;
 
       setStatus("Uploading to Drive & writing to Sheet…");
       submitBtn.disabled = true;
 
       try {
-        const [stickerB64, mcB64] = await Promise.all([
-          fileOrBlobToBase64(barcodeSource), // send the barcode-cropped (or full) sticker
-          fileOrBlobToBase64(mcSource)
-        ]);
-
+        const [stickerB64, mcB64] = await Promise.all([ blobToBase64(stickerBlob), blobToBase64(mcBlob) ]);
         const payload = {
           zone,
-          ocrText: nameOcr,             // for server logging only
-          nameOverride: name || null,   // enforce final name
-          mrnOverride: mrn || null,     // enforce final MRN (from barcode or manual)
+          ocrText: nameOcr,
+          nameOverride: name || null,
+          mrnOverride: mrn || null,
           barcodeRaw: barcode.raw || null,
-          sticker: { name: stickerFile.name, mime: "image/jpeg", b64: stickerB64 },
-          mcfile:  { name: mcFile.name,     mime: "image/jpeg", b64: mcB64 }
+          sticker: { name: stickerInput.files[0].name, mime: "image/jpeg", b64: stickerB64 },
+          mcfile:  { name: mcInput.files[0].name,     mime: "image/jpeg", b64: mcB64 }
         };
 
         const resp = await fetch(GAS_URL, { method: "POST", body: JSON.stringify(payload) });
-        if (!resp.ok) {
-          const txt = await resp.text();
-          throw new Error(`HTTP ${resp.status} – ${txt.slice(0,200)}`);
-        }
+        if (!resp.ok) { const txt = await resp.text(); throw new Error(`HTTP ${resp.status} – ${txt.slice(0,200)}`); }
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || "Unknown server error");
 
         setStatus("Success ✔ Files uploaded & row added.", true);
         ocrBox.textContent = `Name=${data.name || name || "—"} | MRN=${data.mrn || mrn || "—"}\nSticker: ${data?.sticker?.url || "—"}\nMC: ${data?.mc?.url || "—"}`;
-        alert("OK:\n" + JSON.stringify(data, null, 2));
       } catch (err) {
         console.error(err);
         setStatus("Failed: " + err.message, false, true);
