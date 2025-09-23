@@ -39,7 +39,7 @@
     }
     .title { font-weight: 700; letter-spacing: 0.2px; }
     .muted { color: var(--muted); font-size: 0.9rem; }
-    /* Viewfinder container */
+    /* Viewfinder container + guide */
     .video-wrap {
       position: relative;
       background: #060a15;
@@ -47,15 +47,11 @@
       box-shadow: var(--shadow);
       overflow: hidden;
       aspect-ratio: 12/7; /* keep in sync with guide */
-      max-height: 38vh;
+      max-height: 42vh;
     }
-
-    /* Centered, ratio-locked guide box that always fits inside with margins */
-    .guide-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 92%; max-width: calc(100% - 16px); /* horizontal margin */
-      aspect-ratio: 12/7; border: 2px solid rgba(255,255,255,0.45); border-radius: 10px;
-      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); pointer-events: none; }
-    @media (min-width: 680px) { .guide-box { width: 90%; } }
+    .guide-box { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+    .guide-box::before { content: ""; display: block; width: 90%; aspect-ratio: 12/7; border: 2px solid rgba(255,255,255,0.45); border-radius: 10px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12); }
+    @media (min-width: 680px) { .video-wrap { max-height: 50vh; } .guide-box::before { width: 86%; } }
     video { width: 100%; height: 100%; object-fit: cover; display: block; }
     .guides { display: none !important; }
     .guide-rect { display: none !important; }
@@ -107,6 +103,8 @@
   </style>
   <!-- ZXing (UMD) for barcode scanning -->
   <script defer src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <!-- Tesseract.js for on-device OCR (English by default) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -135,6 +133,7 @@
         <label style="display:flex;align-items:center;gap:8px;justify-content:center;background:#16203b;border:1px solid #243055;border-radius:12px;padding:12px;">
           <input id="pause-on-hit" type="checkbox" checked /> Pause on first hit
         </label>
+        <button id="ocr" title="Run OCR on current frame">Scan Text (OCR)</button>
       </div>
 
       <article id="result" class="result" hidden>
@@ -152,6 +151,10 @@
             <div>MRN</div><div id="fld-mrn">—</div>
             <div>DOB</div><div id="fld-dob">—</div>
           </div>
+        </div>
+        <div id="ocr-wrap" style="margin-top:10px;" hidden>
+          <h3>OCR Text</h3>
+          <div class="code-box" id="ocr-text">—</div>
         </div>
       </article>
     </main>
@@ -187,6 +190,13 @@
   let currentStreamTrack = null;
   let torchOn = false;
   let scanning = false;
+
+  // OCR setup
+  const btnOCR = document.getElementById('ocr');
+  const ocrWrap = document.getElementById('ocr-wrap');
+  const ocrText = document.getElementById('ocr-text');
+  const workCanvas = document.createElement('canvas');
+  const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
 
   function setLed(text, cls) {
     statusLed.textContent = text;
@@ -285,7 +295,45 @@
   }
 
   function bytesToHex(u8){
-    return [...u8].map(b => b.toString(16).padStart(2,'0')).join(' ');
+    try { return [...u8].map(b => b.toString(16).padStart(2,'0')).join(' '); } catch { return ''; }
+  }
+
+  // Capture current video frame into a canvas (downscale for speed)
+  function captureFrame(scale = 1){
+    if (!video || video.readyState < 2) throw new Error('Video not ready');
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const sw = Math.max(320, Math.round(vw * scale));
+    const sh = Math.max(240, Math.round(vh * scale));
+    workCanvas.width = sw; workCanvas.height = sh;
+    workCtx.drawImage(video, 0, 0, sw, sh);
+    return workCanvas;
+  }
+
+  async function runOCR(){
+    try {
+      setLed('OCR…');
+      const canvas = captureFrame(0.7);
+      const { data } = await Tesseract.recognize(canvas, 'eng');
+      const res = { data };
+      const text = (res && res.data && res.data.text) ? res.data.text.trim() : '';
+      ocrText.textContent = text || '—';
+      ocrWrap.hidden = !text;
+      if (text){
+        const fields = parseCommonFields(text);
+        const hasFields = fields.name || fields.mrn || fields.dob;
+        if (hasFields){
+          fldName.textContent = fields.name || '—';
+          fldMrn.textContent = fields.mrn || '—';
+          fldDob.textContent = fields.dob || '—';
+          parsedWrap.hidden = false;
+        }
+      }
+      setLed('Scanning…', 'on');
+    } catch (e){
+      console.error('OCR failed', e);
+      alert('OCR failed: ' + (e.message || e));
+      setLed(scanning ? 'Scanning…' : 'Idle');
+    }
   }
   function parseCommonFields(text){
     const out = { name: '', mrn: '', dob: '' };
@@ -347,10 +395,8 @@
     img.src = url;
   }
 
-  // Event bindings
-  btnStart.addEventListener('click', startScan);
-  btnStop.addEventListener('click', stopScan);
-  btnTorch.addEventListener('click', toggleTorch);
+  
+  btnOCR.addEventListener('click', runOCR);
   selCams.addEventListener('change', async () => {
     const wasScanning = scanning; await stopScan(); currentDeviceId = selCams.value; if (wasScanning) startScan();
   });
