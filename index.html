@@ -131,10 +131,9 @@
         <label class="file"><input id="file" type="file" accept="image/*;capture=camera"> Scan Image</label>
         <button id="clear">Clear</button>
         <label style="display:flex;align-items:center;gap:8px;justify-content:center;background:#16203b;border:1px solid #243055;border-radius:12px;padding:12px;">
-          <input id="pause-on-hit" type="checkbox" checked /> Pause on first hit
+          <input id="pause-on-hit" type="checkbox" /> Pause on first hit
         </label>
-        <button id="ocr" title="Run OCR on current frame">Scan Text (OCR)</button>
-      </div>
+        </div>
 
       <article id="result" class="result" hidden>
         <h3>Last Scan</h3>
@@ -152,9 +151,7 @@
             <div>DOB</div><div id="fld-dob">—</div>
           </div>
         </div>
-        <div id="ocr-wrap" style="margin-top:10px;" hidden>
-          <h3>OCR Text</h3>
-          <div class="code-box" id="ocr-text">—</div>
+        
         </div>
       </article>
     </main>
@@ -191,10 +188,10 @@
   let torchOn = false;
   let scanning = false;
 
-  // OCR setup
-  const btnOCR = document.getElementById('ocr');
-  const ocrWrap = document.getElementById('ocr-wrap');
-  const ocrText = document.getElementById('ocr-text');
+  // OCR (auto) setup
+  let ocrTimer = null;
+  let ocrRunning = false;
+  let ocrLastName = '';
   const workCanvas = document.createElement('canvas');
   const workCtx = workCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -276,6 +273,7 @@
       const stream = video.srcObject;
       currentStreamTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
       btnTorch.disabled = !getTorchCapability(currentStreamTrack);
+      startAutoOCR();
     } catch (e){
       console.error('decodeFromVideoDevice failed', e);
       setLed('Camera error', '');
@@ -291,6 +289,8 @@
       video.srcObject = null;
     } catch {}
     currentStreamTrack = null; torchOn = false; btnTorch.textContent = 'Torch';
+    if (ocrTimer) { try { clearInterval(ocrTimer); } catch {} ocrTimer = null; }
+    ocrRunning = false; ocrLastName = '';
     scanning = false; setButtons(); setLed('Idle');
   }
 
@@ -309,24 +309,39 @@
     return workCanvas;
   }
 
-  async function runOCR(){
-    try {
-      setLed('OCR…');
-      const canvas = captureFrame(0.7);
-      const { data } = await Tesseract.recognize(canvas, 'eng');
-      const res = { data };
-      const text = (res && res.data && res.data.text) ? res.data.text.trim() : '';
-      ocrText.textContent = text || '—';
-      ocrWrap.hidden = !text;
-      if (text){
-        const fields = parseCommonFields(text);
-        const hasFields = fields.name || fields.mrn || fields.dob;
-        if (hasFields){
-          fldName.textContent = fields.name || '—';
-          fldMrn.textContent = fields.mrn || '—';
-          fldDob.textContent = fields.dob || '—';
+  function firstLineFromText(text){
+    if (!text) return '';
+    const line = text.split(/
+?
+/).map(s=>s.trim()).filter(Boolean)[0] || '';
+    return line;
+  }
+
+  function startAutoOCR(){
+    if (ocrTimer) { clearInterval(ocrTimer); ocrTimer = null; }
+    ocrTimer = setInterval(async () => {
+      if (!scanning) return;
+      if (ocrRunning) return;
+      if (!(window.Tesseract && Tesseract.recognize)) return;
+      if (!video || video.readyState < 2) return;
+      ocrRunning = true;
+      try {
+        const canvas = captureFrame(0.6);
+        const { data } = await Tesseract.recognize(canvas, 'eng');
+        const text = (data && data.text ? data.text.trim() : '');
+        const nameLine = firstLineFromText(text);
+        if (nameLine && nameLine !== ocrLastName) {
+          ocrLastName = nameLine;
+          fldName.textContent = nameLine;
           parsedWrap.hidden = false;
         }
+      } catch(e) {
+        // ignore OCR errors; try again on next tick
+      } finally {
+        ocrRunning = false;
+      }
+    }, 2000);
+  }
       }
       setLed('Scanning…', 'on');
     } catch (e){
@@ -395,8 +410,6 @@
     img.src = url;
   }
 
-  
-  btnOCR.addEventListener('click', runOCR);
   btnStart.addEventListener('click', startScan);
   btnStop.addEventListener('click', stopScan);
   btnTorch.addEventListener('click', toggleTorch);
