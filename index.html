@@ -1,526 +1,368 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Medical Certificate (MC) Use — Live Scan (Robust)</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Mobile Barcode Scanner • Minimal</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --card: #121a2f;
+      --text: #e8eefc;
+      --muted: #a7b0c8;
+      --accent: #4f86ff;
+      --good: #15c27a;
+      --warn: #ffb020;
+      --bad:  #ff5a5a;
+      --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      background: var(--bg);
+      color: var(--text);
+      -webkit-tap-highlight-color: transparent;
+      overflow-x: hidden;
+    }
+    .app {
+      min-height: 100dvh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 8px 4px;
+    }
+    .title { font-weight: 700; letter-spacing: 0.2px; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
 
-<style>
-  :root { --gap: 12px; }
-  * { box-sizing: border-box; }
-  html, body { margin:0; padding:0; }
-  body {
-    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    line-height:1.35; color:#111; background:#fff; overflow-x:hidden;
-  }
-  .wrap { max-width: 680px; width:100%; margin:16px auto 56px; padding:0 12px; }
-  h2 { margin:8px 0 6px; font-size:1.25rem; }
-  .muted { color:#666; font-size:.92rem; margin-bottom:10px; }
+    .video-wrap {
+      position: relative;
+      background: #060a15;
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      aspect-ratio: 9/16; /* tall preview for mobile; prevents layout shift */
+      max-height: 70vh;
+    }
+    video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .overlay {
+      position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.4) 70%);
+      outline: 2px dashed rgba(255,255,255,0.25);
+      outline-offset: -16px; border-radius: 16px;
+    }
+    .led {
+      position: absolute; top: 10px; right: 10px; z-index: 3;
+      padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      background: #1a243d; color: var(--muted); border: 1px solid #2a375f;
+    }
+    .led.on { background: #112b1f; color: #b2f5dc; border-color: #1f6a4f; }
 
-  fieldset { border:1px solid #e5e5e5; border-radius:12px; padding:12px; }
-  label { display:block; margin:10px 0 6px; font-weight:600; }
-  select, input[type=file], input[type=text], button {
-    display:block; width:100%; font-size:16px; padding:10px; border-radius:12px;
-    border:1px solid #d7d7d7; background:#fff;
-  }
-  input[type=file] { padding:8px; }
-  button { background:#0a7a2f; color:#fff; border:none; font-weight:600; }
-  button.secondary { background:#e9ecef; color:#111; border:1px solid #d7d7d7; }
-  button:disabled { opacity:.6; }
+    .controls {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;
+      margin-top: 10px;
+    }
+    button, select, input[type="file"] {
+      appearance: none; -webkit-appearance: none;
+      background: var(--card); color: var(--text);
+      border: 1px solid #243055; border-radius: 12px; padding: 12px; font-weight: 600;
+      box-shadow: var(--shadow);
+      width: 100%;
+    }
+    button.primary { background: var(--accent); border-color: transparent; color: white; }
+    button.good { background: var(--good); border-color: transparent; color: #04281a; }
+    button.warn { background: var(--warn); border-color: transparent; color: #2a1f07; }
+    button:disabled { opacity: 0.5; }
+    label.file { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+    label.file input { display: none; }
 
-  .grid { display:grid; grid-template-columns:1fr; gap:var(--gap); }
-  @media (min-width:900px){ .grid.two{ grid-template-columns:1fr 1fr; } }
+    .result {
+      margin-top: 8px; padding: 12px; border-radius: 14px; background: var(--card); border: 1px solid #263560;
+    }
+    .result h3 { margin: 0 0 8px; font-size: 1rem; }
+    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 0.95rem; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .code-box {
+      background: #0d1427; border: 1px solid #22325c; border-radius: 10px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-word;
+    }
 
-  .preview {
-    width:100%; height:auto; max-height:240px; object-fit:contain;
-    border:1px dashed #cfcfcf; border-radius:12px; background:#fafafa;
-  }
-  .log {
-    font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    font-size:.95rem; white-space:pre-wrap; background:#fafafa; border:1px solid #eee;
-    border-radius:12px; padding:10px;
-  }
-  .ok{color:#0a7a2f}.err{color:#b00020}
+    footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+    .sr-only { position: absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
-  /* Scanner modal */
-  .modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; z-index:9999; }
-  .modal.open { display:flex; align-items:center; justify-content:center; }
-  .scan-card {
-    width:min(720px, 95vw); height:min(85vh, 680px);
-    background:#fff; border-radius:14px; padding:12px; display:flex; flex-direction:column; gap:10px;
-  }
-  .scan-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .scan-head b { font-size:1rem; }
-  .scan-body { position:relative; flex:1; border:1px solid #e5e5e5; border-radius:12px; overflow:hidden; background:#000; }
-  #camVideo { width:100%; height:100%; object-fit:cover; transform: translateZ(0); will-change: transform; } /* iOS keep-alive */
-  #camCanvas, #boxCanvas { position:absolute; inset:0; }
-  .scan-foot { display:flex; gap:8px; flex-wrap:wrap; }
-  .chip { font-size:.9rem; padding:6px 10px; border-radius:999px; background:#f1f3f5; border:1px solid #e9ecef; }
-</style>
-
-<!-- Tesseract OCR -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-<!-- Quagga2 (fallback if BarcodeDetector unsupported) -->
-<script src="https://cdn.jsdelivr.net/npm/quagga2@1.8.4/dist/quagga.min.js"></script>
-<!-- HEIC -> JPEG (for MC upload only) -->
-<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+    @media (min-width: 680px) { /* desktop-friendly */
+      .app { max-width: 900px; margin: 0 auto; }
+      .controls { grid-template-columns: repeat(4, 1fr); }
+      .video-wrap { aspect-ratio: 16/9; max-height: 60vh; }
+    }
+  </style>
+  <!-- ZXing (UMD) for barcode scanning -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <h2>Medical Certificate (MC) Use</h2>
-    <p class="muted">Live-scan the sticker (no photo saved). Only the MC photo is uploaded to Drive.</p>
+  <div class="app">
+    <header>
+      <div>
+        <div class="title">Barcode Scanner</div>
+        <div class="muted">Simple, mobile‑friendly, works offline (after first load)</div>
+      </div>
+      <span id="status-led" class="led" aria-live="polite">Idle</span>
+    </header>
 
-    <form id="mcForm">
-      <fieldset>
-        <label for="zone">Zone</label>
-        <select id="zone" required>
-          <option value="">— Select —</option>
-          <option>Green</option><option>Yellow</option><option>Red</option>
-        </select>
+    <main>
+      <section class="video-wrap">
+        <video id="preview" playsinline autoplay muted></video>
+        <div class="overlay" aria-hidden="true"></div>
+      </section>
 
-        <div class="grid two">
-          <div>
-            <label>Sticker (live scan)</label>
-            <div class="grid">
-              <button type="button" id="openScan" class="secondary">Scan sticker now</button>
-              <div class="log" id="detectedBox">— waiting —</div>
-            </div>
-          </div>
+      <div class="controls" role="group" aria-label="Scanner controls">
+        <button id="start" class="primary">Start</button>
+        <button id="stop" class="warn" disabled>Stop</button>
+        <button id="torch" disabled>Torch</button>
+        <select id="cameras" aria-label="Camera" title="Camera"></select>
+        <label class="file"><input id="file" type="file" accept="image/*;capture=camera"> Scan Image</label>
+        <button id="clear">Clear</button>
+        <label style="display:flex;align-items:center;gap:8px;justify-content:center;background:#16203b;border:1px solid #243055;border-radius:12px;padding:12px;">
+          <input id="pause-on-hit" type="checkbox" /> Pause on first hit
+        </label>
+      </div>
 
-          <div>
-            <label for="mcfile">Medical Certificate photo (saved)</label>
-            <input type="file" id="mcfile" accept="image/*" capture="environment" required />
-            <img id="mcPreview" class="preview" alt="">
+      <article id="result" class="result" hidden>
+        <h3>Last Scan</h3>
+        <div class="kv">
+          <div>Format</div><div id="fmt">—</div>
+          <div>Text</div><div id="text" class="code-box">—</div>
+          <div>Raw Bytes</div><div id="bytes" class="code-box">—</div>
+          <div>Detected</div><div id="when">—</div>
+        </div>
+        <div id="parsed" style="margin-top:10px;" hidden>
+          <h3>Extracted Fields</h3>
+          <div class="kv">
+            <div>Name</div><div id="fld-name">—</div>
+            <div>MRN</div><div id="fld-mrn">—</div>
+            <div>DOB</div><div id="fld-dob">—</div>
           </div>
         </div>
+      </article>
+    </main>
 
-        <div class="grid two" style="margin-top: var(--gap)">
-          <div>
-            <label>Manual override (optional)</label>
-            <input type="text" id="nameManual" placeholder="Name (override)">
-            <input type="text" id="mrnManual" placeholder="MRN (UPMxxxxxxxxx)">
-          </div>
-          <div>
-            <label>Status</label>
-            <div id="status" class="log">Idle</div>
-          </div>
-        </div>
-
-        <div style="margin-top:var(--gap)"><button id="submitBtn" type="submit">Submit</button></div>
-      </fieldset>
-    </form>
-  </div>
-
-  <!-- Live scanner modal -->
-  <div id="scanModal" class="modal" aria-hidden="true">
-    <div class="scan-card">
-      <div class="scan-head">
-        <b>Scan sticker (live)</b>
-        <span id="scanHint" class="chip">Align barcode; hold steady</span>
-      </div>
-      <div class="scan-body">
-        <video id="camVideo" playsinline autoplay muted></video>
-        <canvas id="camCanvas"></canvas>
-        <canvas id="boxCanvas"></canvas>
-      </div>
-      <div class="scan-foot">
-        <button type="button" id="closeScan" class="secondary">Cancel</button>
-        <button type="button" id="toggleTorch" class="secondary">Toggle torch</button>
-      </div>
-    </div>
+    <footer>
+      Works best on HTTPS. On iOS Safari: grant camera permission and keep the tab in foreground. If video is black, tap <strong>Stop</strong> → <strong>Start</strong> once.
+    </footer>
   </div>
 
 <script>
-/* ===== CONFIG ===== */
-const GAS_URL = "https://script.google.com/macros/s/AKfycbwoijzTp_nlEfdXawiLNxPXu0e5sH9qM5FOSJFkzJVoUA0kGZjRAbZAcM1wUJmRwMuC/exec";
-const MAX_DIM_UPLOAD = 1400;           // resize MC before upload (speed)
-const OCR_TIMEOUT_MS = 6000;
-const BARCODE_INTERVAL_MS = 200;       // detection tick
-const OCR_FALLBACK_AFTER_MS = 2500;    // start OCR fallback if no barcode after this
-const OCR_REPEAT_MS = 2000;            // don’t OCR more often than this
+(function(){
+  const $ = (sel) => document.querySelector(sel);
+  const video = $('#preview');
+  const statusLed = $('#status-led');
+  const btnStart = $('#start');
+  const btnStop = $('#stop');
+  const btnTorch = $('#torch');
+  const selCams = $('#cameras');
+  const fileInput = $('#file');
+  const pauseOnHit = $('#pause-on-hit');
+  const resultCard = $('#result');
+  const outFmt = $('#fmt');
+  const outText = $('#text');
+  const outBytes = $('#bytes');
+  const outWhen = $('#when');
+  const parsedWrap = $('#parsed');
+  const fldName = $('#fld-name');
+  const fldMrn = $('#fld-mrn');
+  const fldDob = $('#fld-dob');
 
-/* ===== DOM ===== */
-const $ = id => document.getElementById(id);
-const zoneEl = $("zone");
-const detectedBox = $("detectedBox");
-const statusEl = $("status");
-const submitBtn = $("submitBtn");
-const mcInput = $("mcfile");
-const mcPreview = $("mcPreview");
+  let codeReader = null;
+  let currentDeviceId = null;
+  let currentStreamTrack = null;
+  let torchOn = false;
+  let scanning = false;
 
-const scanModal = $("scanModal");
-const camVideo = $("camVideo");
-const camCanvas = $("camCanvas");
-const boxCanvas = $("boxCanvas");
-const openScanBtn = $("openScan");
-const closeScanBtn = $("closeScan");
-const toggleTorchBtn = $("toggleTorch");
-const scanHint = $("scanHint");
-
-const nameManual = $("nameManual");
-const mrnManual = $("mrnManual");
-
-/* ===== State ===== */
-let stream = null, track = null, detector = null;
-let scanning = false, detectTimer = null, torchOn = false;
-let tesseractWorker = null, ocrRunning = false;
-let startScanTs = 0, lastOcrTryTs = 0;
-
-let foundName = "", foundMRN = "";
-
-/* ===== Helpers ===== */
-function setStatus(msg, ok=false, err=false){
-  statusEl.textContent = msg;
-  statusEl.className = "log" + (ok ? " ok" : "") + (err ? " err" : "");
-}
-const normalizeMrn = (raw) => {
-  if (!raw) return null;
-  const upm = (raw.match(/\b(UPM\d{6,12})\b/i)||[])[1];
-  if (upm) return upm.toUpperCase();
-  const digits = (raw.match(/\b(\d{6,12})\b/)||[])[1];
-  return digits ? ("UPM"+digits) : null;
-};
-function fitWithin(w,h,max){ const s=Math.min(1, max/Math.max(w,h)); return { w:Math.round(w*s), h:Math.round(h*s) }; }
-function drawBox(bbox, color="lime"){
-  const ctx = boxCanvas.getContext("2d");
-  ctx.clearRect(0,0,boxCanvas.width,boxCanvas.height);
-  if (!bbox) return;
-  ctx.strokeStyle = color; ctx.lineWidth = 3;
-  ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
-}
-
-/* ===== Tesseract worker ===== */
-async function getWorker(singleLine=false){
-  if (tesseractWorker) return tesseractWorker;
-  const { createWorker } = Tesseract;
-  tesseractWorker = await createWorker({ logger:()=>{} });
-  await tesseractWorker.loadLanguage("eng");
-  await tesseractWorker.initialize("eng");
-  await tesseractWorker.setParameters({
-    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 @'-./()",
-    preserve_interword_spaces: "1",
-    tessedit_pageseg_mode: singleLine ? "7" : "6"
-  });
-  return tesseractWorker;
-}
-
-/* ===== Live scanner (iOS-friendly) ===== */
-async function startScan(){
-  scanModal.classList.add("open");
-  detectedBox.textContent = "— scanning —";
-  foundName = ""; foundMRN = ""; drawBox(null);
-  startScanTs = Date.now(); lastOcrTryTs = 0; ocrRunning = false;
-
-  try {
-    // Prepare detector if available
-    detector = null;
-    if ("BarcodeDetector" in window) {
-      try {
-        const supported = await BarcodeDetector.getSupportedFormats();
-        const fmts = ['code_128','code_39','code_93','itf','codabar','ean_13','ean_8','pdf417'].filter(f=>supported.includes(f));
-        detector = new BarcodeDetector({ formats: fmts.length ? fmts : ['code_128','code_39','itf'] });
-      } catch { detector = null; }
-    }
-
-    // Start camera (aim for 1920x1080 when possible)
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false
-    });
-    camVideo.srcObject = stream;
-    camVideo.setAttribute("playsinline",""); // iOS
-    camVideo.muted = true;
-    track = stream.getVideoTracks()[0];
-
-    // Wait for metadata for correct videoWidth/Height
-    await new Promise(res => {
-      const onMeta = () => { camVideo.removeEventListener("loadedmetadata", onMeta); res(); };
-      if (camVideo.readyState >= 1) res(); else camVideo.addEventListener("loadedmetadata", onMeta);
-    });
-    await camVideo.play();
-
-    // Size canvases to actual video dimensions
-    const vw = camVideo.videoWidth || 1280;
-    const vh = camVideo.videoHeight || 720;
-    camCanvas.width = boxCanvas.width = vw;
-    camCanvas.height = boxCanvas.height = vh;
-
-    scanning = true;
-
-    if (detectTimer) clearInterval(detectTimer);
-    detectTimer = setInterval(detectFrame, BARCODE_INTERVAL_MS);
-    setStatus("Camera on. Align barcode; hold steady.", true);
-  } catch (e) {
-    console.error(e);
-    detectedBox.textContent = "Camera permission blocked or unavailable.";
-    setStatus("Camera unavailable", false, true);
+  function setLed(text, cls) {
+    statusLed.textContent = text;
+    statusLed.className = 'led' + (cls ? ' ' + cls : '');
   }
-}
-
-function stopScan(){
-  scanning = false;
-  if (detectTimer) { clearInterval(detectTimer); detectTimer = null; }
-  drawBox(null);
-  try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch {}
-  stream = null; track = null;
-  scanModal.classList.remove("open");
-}
-
-async function detectFrame(){
-  if (!scanning || !camVideo || camVideo.readyState < 2) return;
-
-  // Re-sync canvas size if Safari updates video size after play()
-  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
-  if (vw && vh && (vw !== camCanvas.width || vh !== camCanvas.height)) {
-    camCanvas.width = boxCanvas.width = vw;
-    camCanvas.height = boxCanvas.height = vh;
+  function setButtons() {
+    btnStart.disabled = scanning;
+    btnStop.disabled = !scanning;
+    btnTorch.disabled = !currentStreamTrack || !getTorchCapability(currentStreamTrack);
   }
-
-  const ctx = camCanvas.getContext("2d");
-  ctx.drawImage(camVideo, 0, 0, camCanvas.width, camCanvas.height);
-
-  // 1) Try native BarcodeDetector
-  if (detector){
-    try{
-      const codes = await detector.detect(camCanvas);
-      if (codes && codes.length){
-        let best = codes[0];
-        for (const c of codes) if ((c.rawValue||'').length > (best.rawValue||'').length) best = c;
-        const bbox = best.boundingBox || rectFromPoints(best.cornerPoints);
-        const mrn = normalizeMrn(String(best.rawValue||'').trim());
-        if (bbox) drawBox(bbox, mrn ? "lime" : "orange");
-        if (mrn) { scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;} await handleFound(camCanvas, bbox, mrn); return; }
-      } else {
-        drawBox(null);
-      }
-    } catch (_) {}
-  } else {
-    // 2) Fallback to Quagga snapshot (0° then 90° rotated)
-    const snapshot = camCanvas.toDataURL("image/jpeg", 0.9);
-    const mrnHit = await quaggaTry(snapshot);
-    if (mrnHit) return;
-    const rotated = await rotateDataUrl(snapshot, 90);
-    await quaggaTry(rotated);
+  function getTorchCapability(track){
+    try {
+      const caps = track?.getCapabilities?.();
+      return !!(caps && 'torch' in caps);
+    } catch { return false; }
   }
-
-  // 3) OCR fallback if barcode hasn't been found for a while
-  const now = Date.now();
-  if (!ocrRunning && (now - startScanTs > OCR_FALLBACK_AFTER_MS) && (now - lastOcrTryTs > OCR_REPEAT_MS)) {
-    lastOcrTryTs = now;
-    ocrRunning = true;
-    runFallbackOCR(camCanvas).finally(()=>{ ocrRunning = false; });
-  }
-}
-
-function rectFromPoints(pts){
-  if (!pts || !pts.length) return null;
-  const xs = pts.map(p=>p.x), ys = pts.map(p=>p.y);
-  const x = Math.min(...xs), y = Math.min(...ys);
-  const w = Math.max(...xs)-x, h = Math.max(...ys)-y;
-  return { x, y, width:w, height:h };
-}
-
-/* Quagga single attempt helper */
-function quaggaDecode(src){
-  return new Promise(resolve=>{
-    Quagga.decodeSingle({
-      src,
-      numOfWorkers: 0,
-      locate: true,
-      inputStream: { size: 1280 },
-      locator: { halfSample: false, patchSize: "x-large" },
-      decoder: { readers: ["code_128_reader","code_39_reader","code_93_reader","i2of5_reader","codabar_reader","ean_reader","ean_8_reader"] }
-    }, res=>{
-      if (res && res.codeResult && res.codeResult.code){
-        const mrn = normalizeMrn(String(res.codeResult.code));
-        const bbox = res.box ? rectFromPoints(res.box.map(([x,y])=>({x,y}))) : null;
-        resolve({ mrn, bbox });
-      } else resolve(null);
-    });
-    // safety timeout
-    setTimeout(()=>resolve(null), 1200);
-  });
-}
-async function quaggaTry(dataUrl){
-  const r = await quaggaDecode(dataUrl);
-  if (r && r.mrn){
-    scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;}
-    // Draw box if we can compute it in canvas space (approximate)
-    if (r.bbox) drawBox(r.bbox, "lime");
-    await handleFound(camCanvas, r.bbox || null, r.mrn);
-    return true;
-  }
-  return false;
-}
-async function rotateDataUrl(dataUrl, deg){
-  const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=dataUrl; });
-  const rad = deg*Math.PI/180;
-  const sw = img.width, sh = img.height;
-  const cw = (deg%180===0)? sw : sh;
-  const ch = (deg%180===0)? sh : sw;
-  const can = document.createElement("canvas"); can.width=cw; can.height=ch;
-  const ctx = can.getContext("2d");
-  ctx.translate(cw/2, ch/2); ctx.rotate(rad); ctx.drawImage(img, -sw/2, -sh/2);
-  return can.toDataURL("image/jpeg", 0.9);
-}
-
-/* When we DO have a barcode -> OCR the name above it (single line) */
-async function handleFound(frameCanvas, bbox, mrn){
-  try{
-    foundMRN = mrn;
-    scanHint.textContent = "Barcode found. Reading name…";
-    let name = "";
-
-    if (bbox){
-      // crop above barcode
-      const m = Math.round(Math.max(6, bbox.height * 0.25));
-      const x = Math.max(0, Math.floor(bbox.x - m));
-      const w = Math.min(frameCanvas.width - x, Math.floor(bbox.width + 2*m));
-      const yBottom = Math.max(0, Math.floor(bbox.y - m));
-      const h = Math.min(frameCanvas.height, Math.floor(2*bbox.height + m));
-      const y = Math.max(0, yBottom - h);
-
-      const crop = document.createElement("canvas");
-      crop.width = w; crop.height = h;
-      crop.getContext("2d").drawImage(frameCanvas, x, y, w, h, 0, 0, w, h);
-
-      const worker = await getWorker(true);
-      const res = await Promise.race([
-        worker.recognize(crop),
-        new Promise(r => setTimeout(()=>r(null), OCR_TIMEOUT_MS))
-      ]);
-      if (res && res.data && res.data.text){
-        name = String(res.data.text).toUpperCase().replace(/\s{2,}/g,' ').trim();
-        name = name.replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
-      }
-    }
-
-    foundName = name;
-    detectedBox.textContent = `Name=${foundName || "—"}  |  MRN=${foundMRN || "—"}`;
-    scanHint.textContent = "Done. You can close this window.";
-  } catch(e){
-    detectedBox.textContent = `Detected MRN=${mrn}. Name OCR failed; you can type it.`;
-  }
-}
-
-/* OCR fallback if barcode is stubborn: try to pull MRN + Name from whole frame */
-async function runFallbackOCR(frameCanvas){
-  try{
-    scanHint.textContent = "No barcode yet — trying OCR fallback…";
-    const worker = await getWorker(false);
-    const res = await Promise.race([
-      worker.recognize(frameCanvas),
-      new Promise(r => setTimeout(()=>r(null), OCR_TIMEOUT_MS))
-    ]);
-    if (!res) return;
-    const text = String(res.data?.text || "").toUpperCase();
-
-    // MRN from text (UPM + digits); if only digits found, prefix
-    let mrn = (text.match(/\b(UPM\d{6,12})\b/i)||[])[1];
-    if (!mrn){
-      const digits = (text.match(/\b(\d{6,12})\b/)||[])[1];
-      if (digits) mrn = "UPM" + digits;
-    }
-    // Name: first line with no digits
-    const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-    let name = (lines.find(t => t && !/\d/.test(t)) || "").replace(/^[^A-Z0-9]+|[^A-Z0-9 @'\.-]+$/g,'').trim();
-
-    if (mrn || name){
-      // success -> stop scanning and fill
-      scanning = false; if (detectTimer){clearInterval(detectTimer); detectTimer=null;}
-      foundMRN = mrn || foundMRN;
-      foundName = name || foundName;
-      detectedBox.textContent = `Name=${foundName || "—"}  |  MRN=${foundMRN || "—"}`;
-      scanHint.textContent = "OCR fallback used. You can close this window.";
-    }
-  } catch(_){}
-}
-
-/* Torch toggle (if supported) */
-toggleTorchBtn.addEventListener("click", async ()=>{
-  if (!track) return;
-  try{
+  async function toggleTorch(){
+    if (!currentStreamTrack) return;
     torchOn = !torchOn;
-    await track.applyConstraints({ advanced: [{ torch: torchOn }]});
-  }catch{ alert("Torch not supported on this device."); }
-});
-
-/* Open/Close scan */
-openScanBtn.addEventListener("click", startScan);
-closeScanBtn.addEventListener("click", ()=>{
-  stopScan();
-  if (foundName) nameManual.value = foundName;
-  if (foundMRN)  mrnManual.value  = foundMRN;
-});
-
-/* ===== MC upload (only MC is sent to server) ===== */
-mcInput.addEventListener("change", async ()=>{
-  if (!mcInput.files[0]) return;
-  setStatus("Processing MC…");
-  const blob = await normalizeForUpload(mcInput.files[0]);
-  showPreviewBlob(blob, mcPreview);
-  mcUploadBlob = blob;
-  setStatus("MC ready", true);
-});
-
-let mcUploadBlob = null;
-function showPreviewBlob(blob, imgEl){ const url=URL.createObjectURL(blob); imgEl.src=url; imgEl.onload=()=>URL.revokeObjectURL(url); }
-
-async function normalizeForUpload(file){
-  // HEIC -> JPEG
-  if (/image\/hei(c|f)/i.test(file.type) || /\.hei(c|f)$/i.test(file.name)) {
-    const r = await heic2any({ blob:file, toType:"image/jpeg", quality:0.92 });
-    file = new File([Array.isArray(r)?r[0]:r], (file.name.replace(/\.[^\.]+$/,'')||'image')+".jpg", { type:"image/jpeg" });
+    try {
+      await currentStreamTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+      btnTorch.textContent = torchOn ? 'Torch Off' : 'Torch';
+    } catch(e){ console.warn('Torch unsupported', e); }
   }
-  // Resize
-  const img = await new Promise((res,rej)=>{ const u=URL.createObjectURL(file); const i=new Image(); i.onload=()=>{URL.revokeObjectURL(u);res(i)}; i.onerror=rej; i.src=u; });
-  const {w,h} = fitWithin(img.naturalWidth||img.width, img.naturalHeight||img.height, MAX_DIM_UPLOAD);
-  const can = document.createElement("canvas"); can.width=w; can.height=h;
-  const ctx = can.getContext("2d"); ctx.drawImage(img,0,0,w,h);
-  return await new Promise(r => can.toBlob(r, "image/jpeg", 0.85));
-}
-function blobToBase64(blob){ return new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result).split(",")[1]||""); fr.onerror=rej; fr.readAsDataURL(blob); }); }
 
-/* ===== Submit ===== */
-document.getElementById("mcForm").addEventListener("submit", async (e)=>{
-  e.preventDefault();
-  if (!zoneEl.value || !mcInput.files[0]){
-    alert("Please pick a Zone and choose the MC photo."); return;
+  async function listCameras(){
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      selCams.innerHTML = '';
+      cams.forEach((d,i)=>{
+        const opt = document.createElement('option');
+        const label = d.label || `Camera ${i+1}`;
+        opt.value = d.deviceId;
+        opt.textContent = label;
+        selCams.appendChild(opt);
+      });
+      // Prefer a camera labeled as back/environment if available
+      const back = cams.find(d => /back|rear|environment/i.test(d.label));
+      if (back) selCams.value = back.deviceId;
+      if (!selCams.value && cams[0]) selCams.value = cams[0].deviceId;
+    } catch (e){ console.error('enumerateDevices failed', e); }
   }
-  const name = nameManual.value.trim() || foundName || "";
-  const mrn  = (mrnManual.value.trim().toUpperCase()) || foundMRN || "";
 
-  if (!mcUploadBlob) mcUploadBlob = await normalizeForUpload(mcInput.files[0]);
+  async function startScan(){
+    if (scanning) return;
+    if (!('mediaDevices' in navigator) || !('getUserMedia' in navigator.mediaDevices)){
+      alert('Camera not supported on this browser. Try a modern Safari/Chrome/Edge.');
+      return;
+    }
+    setLed('Requesting camera…');
+    setButtons();
+    const ZX = window.ZXing; // UMD global
+    if (!ZX) { alert('ZXing library not loaded yet. If on slow network, try again.'); return; }
+    if (!codeReader) codeReader = new ZX.BrowserMultiFormatReader();
 
-  setStatus("Uploading MC & writing row…");
-  submitBtn.disabled = true;
-  try{
-    const mcB64 = await blobToBase64(mcUploadBlob);
-    const payload = {
-      zone: zoneEl.value,
-      nameOverride: name || null,
-      mrnOverride: mrn || null,
-      mcfile: { name: mcInput.files[0].name, mime: "image/jpeg", b64: mcB64 }
+    // ensure labels are available (iOS hides until permission)
+    try { await navigator.mediaDevices.getUserMedia({ video: true }); } catch(e){}
+    await listCameras();
+
+    currentDeviceId = selCams.value || null;
+    scanning = true; setButtons(); setLed('Scanning…', 'on');
+
+    try {
+      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err) => {
+        if (result) {
+          handleResult(result);
+          if (pauseOnHit.checked) {
+            stopScan();
+          }
+        }
+        if (err && !(err instanceof ZX.NotFoundException)) {
+          console.warn(err);
+        }
+      });
+      // Remember current track for torch
+      const stream = video.srcObject;
+      currentStreamTrack = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null;
+      btnTorch.disabled = !getTorchCapability(currentStreamTrack);
+    } catch (e){
+      console.error('decodeFromVideoDevice failed', e);
+      setLed('Camera error', '');
+      alert('Failed to start camera: ' + (e.message || e));
+      scanning = false; setButtons();
+    }
+  }
+
+  async function stopScan(){
+    try { codeReader?.reset(); } catch {}
+    try {
+      const stream = video.srcObject; if (stream) { stream.getTracks().forEach(t => t.stop()); }
+      video.srcObject = null;
+    } catch {}
+    currentStreamTrack = null; torchOn = false; btnTorch.textContent = 'Torch';
+    scanning = false; setButtons(); setLed('Idle');
+  }
+
+  function bytesToHex(u8){
+    return [...u8].map(b => b.toString(16).padStart(2,'0')).join(' ');
+  }
+  function parseCommonFields(text){
+    const out = { name: '', mrn: '', dob: '' };
+    // Look for MRN patterns
+    const mrn = text.match(/\bMRN[:=\s]*([A-Z0-9\-]{4,})\b/i) || text.match(/\b([A-Z]{2}\d{6,})\b/);
+    if (mrn) out.mrn = mrn[1];
+    // Look for name patterns
+    const name = text.match(/\bNAME[:=\s]*([^|;\n\r]+)\b/i) || text.match(/\bNAMA[:=\s]*([^|;\n\r]+)\b/i);
+    if (name) out.name = name[1].trim();
+    // Dates (DD/MM/YYYY or YYYY-MM-DD)
+    const dob = text.match(/\b(\d{2}[\/.-]\d{2}[\/.-]\d{4}|\d{4}[\/.-]\d{2}[\/.-]\d{2})\b/);
+    if (dob) out.dob = dob[1];
+    return out;
+  }
+
+  function handleResult(result){
+    try {
+      const fmt = String(result.getBarcodeFormat ? result.getBarcodeFormat() : result.format || '—');
+      const txt = String(result.getText ? result.getText() : result.text || '');
+      const raw = result?.rawBytes || result?._rawBytes || null;
+      outFmt.textContent = fmt;
+      outText.textContent = txt || '—';
+      outBytes.textContent = raw ? bytesToHex(new Uint8Array(raw)) : '—';
+      outWhen.textContent = new Date().toLocaleString();
+      resultCard.hidden = false;
+
+      const fields = parseCommonFields(txt);
+      const hasFields = fields.name || fields.mrn || fields.dob;
+      if (hasFields){
+        fldName.textContent = fields.name || '—';
+        fldMrn.textContent = fields.mrn || '—';
+        fldDob.textContent = fields.dob || '—';
+        parsedWrap.hidden = false;
+      } else {
+        parsedWrap.hidden = true;
+      }
+      // brief visual flash on success
+      statusLed.classList.add('on');
+      setTimeout(()=>statusLed.classList.remove('on'), 250);
+    } catch (e){ console.error('handleResult error', e); }
+  }
+
+  async function decodeImageFile(file){
+    const ZX = window.ZXing; if (!ZX) return alert('ZXing not loaded');
+    if (!codeReader) codeReader = new ZX.BrowserMultiFormatReader();
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = async () => {
+      try {
+        const res = await codeReader.decodeFromImage(img);
+        if (res) handleResult(res);
+      } catch (e){
+        alert('No barcode found in image. Try a sharper photo.');
+        console.warn(e);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     };
-    const resp = await fetch(GAS_URL, {
-      method:"POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!resp.ok){ const txt = await resp.text(); throw new Error(`HTTP ${resp.status} – ${txt.slice(0,200)}`); }
-    const data = await resp.json();
-    if (!data.ok) throw new Error(data.error || "Unknown server error");
-
-    setStatus("Success ✔ Files uploaded & row added.", true);
-    detectedBox.textContent = `Name=${data.name || name || "—"}  |  MRN=${data.mrn || mrn || "—"}`;
-  }catch(err){
-    console.error(err);
-    setStatus("Failed: " + err.message, false, true);
-    alert("Error:\n" + err.message);
-  }finally{
-    submitBtn.disabled = false;
+    img.src = url;
   }
-});
+
+  // Event bindings
+  btnStart.addEventListener('click', startScan);
+  btnStop.addEventListener('click', stopScan);
+  btnTorch.addEventListener('click', toggleTorch);
+  selCams.addEventListener('change', async () => {
+    const wasScanning = scanning; await stopScan(); currentDeviceId = selCams.value; if (wasScanning) startScan();
+  });
+  fileInput.addEventListener('change', (e)=>{
+    const f = e.target.files?.[0]; if (f) decodeImageFile(f);
+  });
+  $('#clear').addEventListener('click', ()=>{
+    outFmt.textContent = '—'; outText.textContent = '—'; outBytes.textContent = '—'; outWhen.textContent = '—'; parsedWrap.hidden = true; resultCard.hidden = true;
+  });
+
+  // Proactive iOS hints
+  document.addEventListener('visibilitychange', ()=>{
+    if (document.visibilityState !== 'visible' && scanning) {
+      // Pause when tab loses focus to save battery; resume manually
+      stopScan();
+    }
+  });
+})();
 </script>
 </body>
 </html>
