@@ -52,7 +52,7 @@
     video { width: 100%; height: 100%; object-fit: cover; display: block; }
     .guides { position: absolute; inset: 0; pointer-events: none; }
     .guide-rect { stroke: rgba(255,255,255,0.85); stroke-width: 2; fill: none; }
-    .corner { stroke: rgba(79,134,255,0.95); stroke-width: 4; }
+    .corner { stroke: rgba(79,134,255,0.95); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
     .hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 12px; color: var(--muted); background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 999px; }
     .led {
       position: absolute; top: 10px; right: 10px; z-index: 3;
@@ -117,11 +117,19 @@
         <svg class="guides" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <!-- Centered guide box (60% width, 35% height) -->
           <rect class="guide-rect" x="20" y="32.5" width="60" height="35" rx="2"/>
-          <!-- Corner brackets -->
-          <path class="corner" d="M20 38 L20 32.5 L26 32.5"/>
-          <path class="corner" d="M80 32.5 L86 32.5 L86 38"/>
-          <path class="corner" d="M86 70.5 L86 67 L80 67"/>
-          <path class="corner" d="M26 67 L20 67 L20 70.5"/>
+          <!-- Corner brackets (inward-facing) -->
+          <!-- TL -->
+          <line class="corner" x1="20" y1="32.5" x2="26" y2="32.5"/>
+          <line class="corner" x1="20" y1="32.5" x2="20" y2="38"/>
+          <!-- TR -->
+          <line class="corner" x1="80" y1="32.5" x2="74" y2="32.5"/>
+          <line class="corner" x1="80" y1="32.5" x2="80" y2="38"/>
+          <!-- BR -->
+          <line class="corner" x1="80" y1="67.5" x2="74" y2="67.5"/>
+          <line class="corner" x1="80" y1="67.5" x2="80" y2="61.5"/>
+          <!-- BL -->
+          <line class="corner" x1="20" y1="67.5" x2="26" y2="67.5"/>
+          <line class="corner" x1="20" y1="67.5" x2="20" y2="61.5"/>
         </svg>
         <div class="hint">Align barcode within the box</div>
       </section>
