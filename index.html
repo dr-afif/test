@@ -307,11 +307,11 @@
     return workCanvas;
   }
 
+  const NEWLINE_RE = /\r?\n/;
+
   function firstLineFromText(text){
     if (!text) return '';
-    const line = text.split(/
-?
-/).map(s => s.trim()).filter(Boolean)[0] || '';
+    const line = String(text).split(NEWLINE_RE).map(s => s.trim()).filter(Boolean)[0] || '';
     return line;
   }
 
@@ -339,6 +339,8 @@
         ocrRunning = false;
       }
     }, 2000);
+  }
+
   function parseCommonFields(text){
     const out = { name: '', mrn: '', dob: '' };
     // Look for MRN patterns
